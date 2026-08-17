@@ -750,9 +750,10 @@ cargo rahti native init --force
 
 ## Icons
 
-The generated icons are one flat colour, so that nobody ships them by
-accident. Replace them with your own — Tauri's own tool takes a single square
-PNG and writes every size both platforms want:
+The generated icons are the Rahti mark, at every size Windows and Android ask
+for. That is a real icon set rather than a placeholder, and it is still not
+yours — replace it. Tauri's own tool takes a single square PNG and writes every
+size both platforms want:
 
 ```bash
 cargo tauri icon path/to/icon.png

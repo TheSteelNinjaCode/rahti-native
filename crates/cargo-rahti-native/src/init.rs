@@ -249,16 +249,10 @@ fn write_icons(project: &Project) -> Result<Vec<(String, Outcome)>, NativeError>
     let dir = project.native_dir().join("icons");
     let mut outcomes = Vec::new();
 
-    for (name, size) in icons::SIZES {
-        let path = dir.join(name);
-        outcomes.push((
-            relative(project, &path),
-            put_bytes(&path, &icons::png(*size))?,
-        ));
+    for icon in icons::all() {
+        let path = dir.join(icon.path);
+        outcomes.push((relative(project, &path), put_bytes(&path, icon.bytes)?));
     }
-
-    let path = dir.join(icons::ICO);
-    outcomes.push((relative(project, &path), put_bytes(&path, &icons::ico())?));
     Ok(outcomes)
 }
 

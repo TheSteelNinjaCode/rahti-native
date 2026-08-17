@@ -164,10 +164,97 @@ fn ensure_android_project(project: &Project, config: &NativeConfig) -> Result<()
     // than reviewed, and a patch that only ran once would be gone the first
     // time somebody deleted it.
     allow_loopback_cleartext(&generated)?;
+    install_android_icons(project, &generated)?;
     configure_signing(&generated)?;
 
     let _ = config;
     Ok(())
+}
+
+/// Put the application's launcher icons into the generated Android project.
+///
+/// ## The bug this exists for
+///
+/// `cargo tauri android init` writes a project from `cargo-mobile2`'s template,
+/// and that template ships its own `ic_launcher.webp` in every
+/// `res/mipmap-*`. Nothing then copies `native/icons/` over them — so the icons
+/// beside `tauri.conf.json` reach a Windows package and are ignored completely
+/// by an Android one, and the installed application wears the template's robot.
+/// It looks like a Tauri sample rather than the application somebody built,
+/// and no amount of replacing `icons/icon.png` changes it.
+///
+/// So the icons are copied in, on every Android build, for the same reason the
+/// other two patches are: `gen/android` is regenerated rather than reviewed.
+///
+/// ## Why the `.webp` has to go
+///
+/// Android resources are named without their extension, so
+/// `ic_launcher.webp` and `ic_launcher.png` in one directory are two files
+/// claiming one name — `aapt2` fails the build on the duplicate. Writing the
+/// PNG without removing the template's WebP would trade a wrong icon for no
+/// build at all.
+pub(crate) fn install_android_icons(
+    project: &Project,
+    generated: &Path,
+) -> Result<(), NativeError> {
+    let source = project.native_dir().join("icons/android");
+    if !source.is_dir() {
+        // A project scaffolded before the icons were shipped. The build still
+        // works; it wears the template's icon, which is what it did before.
+        return Ok(());
+    }
+
+    let res = generated.join("app/src/main/res");
+    let mut copied = 0usize;
+
+    for entry in walk(&source)? {
+        let relative = entry
+            .strip_prefix(&source)
+            .map_err(|_| NativeError::at("android", &entry, "an icon outside the icon tree"))?;
+        let target = res.join(relative);
+
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| NativeError::io("android", parent, e))?;
+        }
+
+        // The template's file for the same resource name, whatever it is
+        // called. Removed before ours is written, not after.
+        for extension in ["webp", "png", "xml"] {
+            let rival = target.with_extension(extension);
+            if rival != target && rival.exists() {
+                std::fs::remove_file(&rival).map_err(|e| NativeError::io("android", &rival, e))?;
+            }
+        }
+
+        let bytes = std::fs::read(&entry).map_err(|e| NativeError::io("android", &entry, e))?;
+        if std::fs::read(&target).is_ok_and(|current| current == bytes) {
+            continue;
+        }
+        std::fs::write(&target, bytes).map_err(|e| NativeError::io("android", &target, e))?;
+        copied += 1;
+    }
+
+    if copied > 0 {
+        println!("  android: installed {copied} launcher icon(s)");
+    }
+    Ok(())
+}
+
+/// Every file under `dir`, recursively.
+fn walk(dir: &Path) -> Result<Vec<PathBuf>, NativeError> {
+    let mut found = Vec::new();
+    let entries = std::fs::read_dir(dir).map_err(|e| NativeError::io("android", dir, e))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| NativeError::io("android", dir, e))?;
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(walk(&path)?);
+        } else {
+            found.push(path);
+        }
+    }
+    Ok(found)
 }
 
 /// Wire the release signing key into the generated Gradle project.

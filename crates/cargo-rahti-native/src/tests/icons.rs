@@ -1,126 +1,130 @@
-//! The placeholder icons. Both bundlers refuse to run without them, so what
-//! matters is that they are structurally valid files rather than that they
-//! look like anything.
+//! The launcher icons a new shell starts with.
+//!
+//! They are embedded rather than generated, so what matters is that the set is
+//! complete and that every file in it is the image format its name claims —
+//! a bundler handed something else fails with a message about nothing.
 
 use super::*;
 
-#[test]
-fn a_png_is_a_png() {
-    let png = png(32);
-    assert_eq!(&png[..8], &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]);
-    assert_eq!(&png[12..16], b"IHDR");
-    assert_eq!(&png[16..20], &32u32.to_be_bytes(), "width");
-    assert_eq!(&png[20..24], &32u32.to_be_bytes(), "height");
-    assert_eq!(&png[24..29], &[8, 6, 0, 0, 0], "8-bit RGBA, not interlaced");
-    assert_eq!(&png[png.len() - 8..png.len() - 4], b"IEND");
+/// The eight-byte signature every PNG starts with.
+const PNG_MAGIC: &[u8] = &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+
+fn dimensions(png: &[u8]) -> (u32, u32) {
+    // IHDR is always the first chunk, and its payload starts at byte 16.
+    assert_eq!(&png[..8], PNG_MAGIC, "not a PNG");
+    assert_eq!(&png[12..16], b"IHDR", "IHDR is not the first chunk");
+    (
+        u32::from_be_bytes(png[16..20].try_into().unwrap()),
+        u32::from_be_bytes(png[20..24].try_into().unwrap()),
+    )
 }
 
 #[test]
-fn every_chunk_carries_a_correct_crc() {
-    // The check a decoder makes first. A wrong one is a file the bundler
-    // rejects with a message about nothing.
-    let png = png(32);
-    let mut at = 8;
-    let mut chunks = 0;
-
-    while at + 12 <= png.len() {
-        let length = u32::from_be_bytes(png[at..at + 4].try_into().unwrap()) as usize;
-        let end = at + 8 + length;
-        let expected = u32::from_be_bytes(png[end..end + 4].try_into().unwrap());
-        assert_eq!(crc32(&png[at + 4..end]), expected, "chunk {chunks}");
-        at = end + 4;
-        chunks += 1;
+fn every_size_a_bundler_looks_for_is_present_and_the_right_size() {
+    // `bundle.icon` in the generated tauri.conf.json names the first three;
+    // the Windows executable carries the `.ico`.
+    for (name, expected) in [
+        ("32x32.png", 32),
+        ("128x128.png", 128),
+        ("128x128@2x.png", 256),
+        ("icon.png", 512),
+    ] {
+        let icon = DESKTOP
+            .iter()
+            .find(|i| i.path == name)
+            .unwrap_or_else(|| panic!("{name} is missing"));
+        let (width, height) = dimensions(icon.bytes);
+        assert_eq!((width, height), (expected, expected), "{name}");
     }
-
-    assert_eq!(chunks, 3, "IHDR, IDAT, IEND");
-    assert_eq!(at, png.len(), "there is nothing after IEND");
 }
 
 #[test]
-fn the_pixel_data_is_a_well_formed_zlib_stream() {
-    // Stored deflate blocks: each is a flag byte, a length, and that length
-    // complemented — which is the check a decoder makes.
-    let data = vec![7u8; 200_000];
-    assert!(
-        data.len() > u16::MAX as usize,
-        "the case worth testing is a stream of several blocks"
-    );
+fn the_windows_executable_icon_is_an_ico() {
+    let ico = DESKTOP
+        .iter()
+        .find(|i| i.path == "icon.ico")
+        .expect("icon.ico is missing");
+    // Reserved zero, then type 1 (icon rather than cursor).
+    assert_eq!(&ico.bytes[..4], &[0, 0, 1, 0], "not an ICO");
+    let images = u16::from_le_bytes(ico.bytes[4..6].try_into().unwrap());
+    assert!(images > 0, "an ICO with no images in it");
+}
 
-    let stream = zlib_stored(&data);
-    assert_eq!(&stream[..2], &[0x78, 0x01]);
-
-    let mut at = 2;
-    let mut total = 0usize;
-    loop {
-        let last = stream[at] == 1;
-        let length = u16::from_le_bytes(stream[at + 1..at + 3].try_into().unwrap());
-        let complement = u16::from_le_bytes(stream[at + 3..at + 5].try_into().unwrap());
-        assert_eq!(complement, !length, "the length check would fail");
-        assert_eq!(
-            &stream[at + 5..at + 5 + length as usize],
-            &data[total..total + length as usize]
-        );
-
-        total += length as usize;
-        at += 5 + length as usize;
-        if last {
-            break;
+#[test]
+fn every_android_density_has_its_three_icons() {
+    // Miss one and that density falls back to the project template's own,
+    // which is the failure the whole embedded set exists to prevent.
+    for density in ["mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"] {
+        for name in ["ic_launcher", "ic_launcher_round", "ic_launcher_foreground"] {
+            let path = format!("android/mipmap-{density}/{name}.png");
+            let icon = ANDROID
+                .iter()
+                .find(|i| i.path == path)
+                .unwrap_or_else(|| panic!("{path} is missing"));
+            let (width, height) = dimensions(icon.bytes);
+            assert_eq!(width, height, "{path} is not square");
+            assert!(width >= 48, "{path} is {width}px, too small for a launcher");
         }
     }
-
-    assert_eq!(total, data.len(), "not every byte was stored");
-    assert_eq!(&stream[at..], &adler32(&data).to_be_bytes());
-    assert_eq!(at + 4, stream.len());
 }
 
 #[test]
-fn every_size_a_bundler_looks_for_is_produced() {
-    for (name, size) in SIZES {
-        let png = png(*size);
-        assert_eq!(&png[16..20], &size.to_be_bytes(), "{name}");
-        assert!(png.len() > 100, "{name} is too small to be an image");
+fn the_adaptive_icon_and_its_background_are_present() {
+    // Android 8 and later compose `ic_launcher_foreground` over the colour
+    // named by this XML pair; without them an adaptive launcher shows the
+    // legacy square instead.
+    for path in [
+        "android/mipmap-anydpi-v26/ic_launcher.xml",
+        "android/values/ic_launcher_background.xml",
+    ] {
+        let icon = ANDROID
+            .iter()
+            .find(|i| i.path == path)
+            .unwrap_or_else(|| panic!("{path} is missing"));
+        let text = String::from_utf8_lossy(icon.bytes);
+        assert!(text.contains("<?xml"), "{path} is not XML");
     }
 }
 
 #[test]
-fn the_ico_is_one_thirty_two_pixel_bitmap() {
-    let ico = ico();
-    assert_eq!(&ico[..4], &[0, 0, 1, 0], "reserved, then type 1 (icon)");
-    assert_eq!(
-        u16::from_le_bytes(ico[4..6].try_into().unwrap()),
-        1,
-        "one image"
-    );
-    assert_eq!(ico[6], 32, "width");
-    assert_eq!(ico[7], 32, "height");
-    assert_eq!(
-        u16::from_le_bytes(ico[12..14].try_into().unwrap()),
-        32,
-        "bits per pixel"
-    );
-
-    let size = u32::from_le_bytes(ico[14..18].try_into().unwrap()) as usize;
-    let offset = u32::from_le_bytes(ico[18..22].try_into().unwrap()) as usize;
-    assert_eq!(
-        offset, 22,
-        "the bitmap starts after the header and one entry"
-    );
-    assert_eq!(
-        offset + size,
-        ico.len(),
-        "the entry describes the whole file"
-    );
-
-    // BITMAPINFOHEADER: 40 bytes, and a height of twice the width because the
-    // bitmap carries the colour rows and then the AND mask.
-    assert_eq!(u32::from_le_bytes(ico[22..26].try_into().unwrap()), 40);
-    assert_eq!(u32::from_le_bytes(ico[26..30].try_into().unwrap()), 32);
-    assert_eq!(u32::from_le_bytes(ico[30..34].try_into().unwrap()), 64);
+fn a_density_climbs_with_its_name() {
+    // mdpi through xxxhdpi is 1x to 4x. Out-of-order files would install and
+    // look wrong only on some screens, which is the worst way to be wrong.
+    let mut last = 0;
+    for density in ["mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"] {
+        let path = format!("android/mipmap-{density}/ic_launcher.png");
+        let icon = ANDROID.iter().find(|i| i.path == path).unwrap();
+        let (width, _) = dimensions(icon.bytes);
+        assert!(
+            width > last,
+            "{density} is not larger than the density below"
+        );
+        last = width;
+    }
 }
 
 #[test]
-fn the_checksums_match_values_that_are_not_this_codes_opinion_of_itself() {
-    // The standard check vectors for both algorithms.
-    assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
-    assert_eq!(adler32(b"123456789"), 0x091E_01DE);
+fn every_embedded_icon_has_bytes_and_a_relative_path() {
+    for icon in all() {
+        assert!(!icon.bytes.is_empty(), "{} is empty", icon.path);
+        assert!(
+            !icon.path.starts_with('/') && !icon.path.contains(".."),
+            "{} is not a path inside native/icons/",
+            icon.path
+        );
+        // `/` separators: these become directories on Windows too.
+        assert!(!icon.path.contains('\\'), "{} uses a backslash", icon.path);
+    }
+}
+
+#[test]
+fn the_desktop_and_android_sets_do_not_overlap() {
+    for desktop in DESKTOP {
+        assert!(
+            !ANDROID.iter().any(|a| a.path == desktop.path),
+            "{} is in both sets",
+            desktop.path
+        );
+    }
+    assert_eq!(all().count(), DESKTOP.len() + ANDROID.len());
 }

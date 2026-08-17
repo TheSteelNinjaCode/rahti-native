@@ -174,9 +174,14 @@ INIT:
     --windows          Build a Windows package.
     --android          Build an Android package.
                        Naming neither, the first time, means both.
-    --local <path>     Depend on a Rahti checkout by path rather than by
-                       version. For working on the framework itself. Recorded
-                       in rahti.native.json, so a later run does not need it.
+    --local <path>     Depend on a rahti-native checkout by path rather than
+                       by version. For working on the framework itself.
+                       Recorded in rahti.native.json, so a later run does not
+                       need it.
+                       It has to name the same Rahti checkout the project's
+                       own `--local` did: two copies of one `rahti` version
+                       in a dependency graph is a lockfile collision cargo
+                       refuses, not something it resolves.
     -f, --force        Take back a generated file you have edited. What it
                        replaces is not kept anywhere.
 

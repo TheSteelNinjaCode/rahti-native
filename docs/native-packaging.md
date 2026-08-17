@@ -137,8 +137,23 @@ The shell is a separate cargo package, deliberately outside your workspace
 in a Rahti project that depends on Tauri, so `cargo check --workspace`,
 `cargo test --workspace` and `cargo build` never resolve a native dependency.
 
-The generated icons are one flat colour, so nobody ships them by accident.
-`cargo tauri icon path/to/icon.png` replaces the set.
+The generated icons are the **Rahti mark** — a real icon set, at every size
+Windows and Android ask for, so a first build looks like an application rather
+than a blank square. It is still not *your* mark: replace it with
+
+```bash
+cargo tauri icon path/to/icon.png
+```
+
+which rewrites the whole set from one square PNG.
+
+The Android half matters more than it looks. `cargo tauri android init` writes
+a project whose `res/mipmap-*` already holds the project template's own
+launcher icon, and nothing copies `native/icons/` over it — so an Android build
+would wear the template's robot no matter what is in `icons/`. `cargo rahti
+native` copies the icons in on every Android build, and removes the template's
+file for the same resource name, because two files claiming one name is an
+`aapt2` failure rather than a preference.
 
 ## Where a packaged application keeps things
 

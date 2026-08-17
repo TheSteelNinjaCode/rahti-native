@@ -320,3 +320,138 @@ fn a_half_configured_key_is_refused_rather_than_producing_an_unsigned_release() 
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+// -------------------------------------------------------- launcher icons
+
+/// A generated Android project with the template's own launcher icons in it,
+/// which is the state `cargo tauri android init` leaves behind.
+fn with_template_icons(label: &str) -> (std::path::PathBuf, crate::project::Project) {
+    let root = generated(label, TAURI_MANIFEST);
+
+    for density in ["mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"] {
+        let dir = root.join(format!("app/src/main/res/mipmap-{density}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        // WebP, which is what cargo-mobile2's template actually ships.
+        std::fs::write(dir.join("ic_launcher.webp"), b"the template's robot").unwrap();
+    }
+
+    // The project whose `native/icons/android` the icons are copied from.
+    let project_root = root.join("project");
+    std::fs::create_dir_all(project_root.join("src")).unwrap();
+    std::fs::write(project_root.join("rahti.config.json"), "{}").unwrap();
+    std::fs::write(
+        project_root.join("Cargo.toml"),
+        "[package]
+name = \"app\"
+version = \"1.0.0\"
+",
+    )
+    .unwrap();
+
+    let icons = project_root.join("native/icons");
+    for icon in crate::icons::ANDROID {
+        let target = icons.join(icon.path);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, icon.bytes).unwrap();
+    }
+
+    let project = crate::project::Project::at(&project_root).expect("a project");
+    (root, project)
+}
+
+#[test]
+fn the_applications_launcher_icons_replace_the_templates() {
+    // The bug this exists for: nothing in `tauri android init` copies
+    // `native/icons/` into the generated project, so an Android build wore the
+    // template's robot however many times you replaced `icons/icon.png`.
+    let (root, project) = with_template_icons("icons");
+    crate::run::install_android_icons(&project, &root).expect("the icons install");
+
+    let res = root.join("app/src/main/res");
+    for density in ["mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"] {
+        let png = res.join(format!("mipmap-{density}/ic_launcher.png"));
+        assert!(png.is_file(), "mipmap-{density} did not get an icon");
+        assert_ne!(
+            std::fs::read(&png).unwrap(),
+            b"the template's robot".to_vec()
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn the_templates_file_for_the_same_resource_name_is_removed() {
+    // Android names a resource without its extension, so `ic_launcher.webp`
+    // beside `ic_launcher.png` is two files claiming one name — `aapt2` fails
+    // the build on it. Writing ours without removing theirs would trade a
+    // wrong icon for no build at all.
+    let (root, project) = with_template_icons("icons-clash");
+    crate::run::install_android_icons(&project, &root).expect("the icons install");
+
+    let res = root.join("app/src/main/res");
+    for density in ["mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"] {
+        assert!(
+            !res.join(format!("mipmap-{density}/ic_launcher.webp"))
+                .exists(),
+            "mipmap-{density} still has the template's .webp beside ours"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn the_adaptive_icon_xml_and_its_background_are_installed() {
+    let (root, project) = with_template_icons("icons-adaptive");
+    crate::run::install_android_icons(&project, &root).expect("the icons install");
+
+    let res = root.join("app/src/main/res");
+    assert!(res.join("mipmap-anydpi-v26/ic_launcher.xml").is_file());
+    assert!(res.join("values/ic_launcher_background.xml").is_file());
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn installing_the_icons_twice_writes_them_once() {
+    // It runs on every Android build; a second run must not rewrite files and
+    // make Gradle think every resource changed.
+    let (root, project) = with_template_icons("icons-twice");
+    crate::run::install_android_icons(&project, &root).expect("a first run");
+
+    let png = root.join("app/src/main/res/mipmap-mdpi/ic_launcher.png");
+    let stamp = std::fs::metadata(&png).unwrap().modified().unwrap();
+
+    crate::run::install_android_icons(&project, &root).expect("a second run");
+    assert_eq!(
+        std::fs::metadata(&png).unwrap().modified().unwrap(),
+        stamp,
+        "the second run rewrote an unchanged icon"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_project_with_no_icon_tree_is_left_alone() {
+    // A project scaffolded before the icons shipped. The build still works; it
+    // wears the template's icon, which is what it did before.
+    let root = generated("icons-absent", TAURI_MANIFEST);
+    let project_root = root.join("project");
+    std::fs::create_dir_all(&project_root).unwrap();
+    std::fs::write(project_root.join("rahti.config.json"), "{}").unwrap();
+    std::fs::write(
+        project_root.join("Cargo.toml"),
+        "[package]
+name = \"app\"
+version = \"1.0.0\"
+",
+    )
+    .unwrap();
+    let project = crate::project::Project::at(&project_root).expect("a project");
+
+    crate::run::install_android_icons(&project, &root).expect("nothing to do");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
