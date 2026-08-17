@@ -1,0 +1,11 @@
+/target
+
+# Never commit a keystore, a signing certificate, or anything that carries a
+# password. Release signing is configured through the environment — see
+# docs/native-packaging.md.
+*.keystore
+*.jks
+*.p12
+*.pfx
+key.properties
+keystore.properties

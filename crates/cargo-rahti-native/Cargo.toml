@@ -1,0 +1,27 @@
+[package]
+name = "cargo-rahti-native"
+description = "Optional Windows and Android packaging for Rahti applications: initialize, check prerequisites, run and package a Tauri shell around an existing Rahti app."
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# `cargo rahti native …` and `cargo rahti-native …` both reach this binary —
+# the first through a delegation in cargo-rahti, the second through cargo's own
+# subcommand dispatch.
+[[bin]]
+name = "cargo-rahti-native"
+path = "src/main.rs"
+
+[dependencies]
+# The configuration types, the identifier rules and the capability allowlist,
+# shared with the runtime so the CLI cannot validate something different from
+# what the shell enforces.
+rahti-native = { workspace = true }
+serde_json = "1"
+
+# No Tauri dependency, deliberately. Packaging is delegated to `cargo tauri`,
+# which has to match the `tauri` version in the application's own
+# native/Cargo.toml — see the note in src/doctor.rs.

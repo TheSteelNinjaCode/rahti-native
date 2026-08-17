@@ -1,0 +1,48 @@
+# Rahti's optional native packaging, as its own publishable workspace.
+#
+# Separate from the framework on purpose. A Rahti project is a web application
+# and stays one; nothing here is compiled, downloaded or resolved until
+# somebody installs `cargo-rahti-native` and runs `cargo rahti native init`.
+# Keeping it in the framework workspace would have made "optional" a claim
+# rather than a fact.
+[workspace]
+resolver = "3"
+members = ["crates/cargo-rahti-native", "crates/rahti-native"]
+
+# Inherited by both crates with `field.workspace = true`.
+#
+# One version across the two, deliberately: `cargo-rahti-native` generates a
+# shell that calls functions in `rahti-native`, so a mismatch would be a
+# compile error inside generated code. They release together.
+#
+# Its own release line, independent of the framework's. This package is
+# versioned by what *it* changes, not by what `rahti` does — the two are
+# separate installs and a user upgrades them separately. Starting at 0.0.1
+# says what it is: a first cut of a thing that has not shipped yet.
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jeffersonabraham/rahti-native"
+rust-version = "1.85"
+
+[workspace.dependencies]
+# The framework this packages. A version requirement, because a path-only
+# dependency cannot be published — and the path beside it is what makes a
+# side-by-side checkout build before that version is on crates.io.
+#
+# `0.0.18` is the first release carrying the three things this package calls:
+# `rahti::begin_shutdown`, the `dev-watch` feature, and the scaffold's
+# `initialize_application`. Nothing in the 0.0.17 line has them, so the
+# requirement is exact rather than optimistic.
+#
+# The path points at `../rahti`, the **publishing** checkout, not at
+# `../rahti-dev`. That is deliberate: `rahti-dev` is where framework work
+# happens and its version tracks nothing in particular, while `../rahti` is
+# what goes to crates.io — so the code this builds against is the code that
+# will actually be published under `0.0.18`.
+rahti = { version = "0.0.18", path = "../rahti/crates/rahti", default-features = false }
+
+# The runtime, for the CLI's dependency on it. Same version as the workspace
+# above, and bumped with it.
+rahti-native = { version = "0.0.1", path = "crates/rahti-native" }

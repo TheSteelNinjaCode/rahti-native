@@ -1,0 +1,56 @@
+[package]
+name = "rahti-native"
+description = "Run a Rahti application inside a native package: packaged paths, a loopback-only embedded server, and a per-installation session key."
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# The router this crate serves, and the response types the loopback gate
+# returns. Already in every Rahti application's tree.
+axum = "0.8.9"
+# `default-features = false` drops `notify`: a packaged application's assets
+# are written out of the binary into internal storage, so there is nothing to
+# watch, and the dependency should leave the Android build rather than be
+# compiled and not called. See the `dev-watch` feature on `rahti`.
+rahti = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The launch token and the per-installation session key are asked of the
+# operating system, not of the clock.
+getrandom = "0.3"
+# `net` is the loopback listener; `rt`/`macros`/`time` are the supervised task
+# the server runs on and the bounded wait a shutdown gets.
+tokio = { version = "1.53.1", features = ["macros", "net", "rt", "sync", "time"] }
+
+# DPAPI, for the per-installation session key on Windows. `CryptProtectData`
+# ties the stored blob to the user account, so a file copied to another machine
+# or read by another user decrypts to nothing. Windows-only: no other target
+# pays for it.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+tokio = { version = "1.53.1", features = ["full"] }
+tower = { version = "0.5", features = ["util"] }
+
+# `tests/embedded.rs` drives a real Rahti application over a real socket, so
+# it needs the parts of the framework an application has: the macros, the
+# socket endpoint behind rahti's `ws` feature, and a static file service.
+rahti = { workspace = true, features = ["ws"] }
+tower-http = { version = "0.7", features = ["fs"] }
+# A socket upgrade cannot be faked through `tower::Service` — the connection it
+# hands over only exists on a live socket. `futures-util` is the Stream and
+# Sink traits that client speaks; `http` builds the handshake request that
+# carries the launch cookie.
+tokio-tungstenite = "0.28"
+futures-util = "0.3"
+http = "1"
+serde = { version = "1", features = ["derive"] }
