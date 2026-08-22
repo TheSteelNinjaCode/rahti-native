@@ -89,7 +89,7 @@ document `cargo rahti new` ships into a project's `docs/conventions/`.
 
 ## Status
 
-Early — `0.0.1`, and not yet on crates.io. It has its own release line rather
+Early — `0.0.2`. It has its own release line rather
 than tracking the framework's: the two are separate installs and you upgrade
 them separately. See [`PUBLISHING.md`](PUBLISHING.md).
 

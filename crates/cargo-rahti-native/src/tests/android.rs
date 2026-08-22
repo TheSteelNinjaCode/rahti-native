@@ -1,8 +1,6 @@
 //! The Android project patches `cargo rahti native` applies after Tauri has
 //! generated it.
 
-use super::*;
-
 /// Tauri 2's generated manifest, in the shape this patch anchors on.
 const TAURI_MANIFEST: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">

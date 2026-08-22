@@ -513,10 +513,10 @@ fn windows_environment(command: &mut Command) {
             "TAURI_SIGNING_WINDOWS_CERTIFICATE_PASSWORD",
         ),
     ] {
-        if let Ok(value) = std::env::var(ours) {
-            if !value.trim().is_empty() {
-                command.env(theirs, value);
-            }
+        if let Ok(value) = std::env::var(ours)
+            && !value.trim().is_empty()
+        {
+            command.env(theirs, value);
         }
     }
 }

@@ -108,12 +108,11 @@ fn router(public: &std::path::Path) -> Router {
 
 /// Serializes the tests in this binary.
 ///
-/// `rahti`'s shutdown broadcast is a process-wide static, which is right for a
-/// process — there is one, and it stops once. A test binary is the odd case:
-/// every test here starts and stops a real server, and each stop tells every
-/// open stream *in this process* to end. Run in parallel, the streaming test
-/// collects one tick instead of three and blames the stream.
-static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// The framework and native runtime intentionally keep process-wide state such
+/// as auth configuration, launch tokens and environment overrides. A packaged
+/// process has one application; this test binary starts several, so they run
+/// one at a time.
+static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 struct Packaged {
     server: RunningServer,
@@ -121,12 +120,12 @@ struct Packaged {
     cookies: HashMap<String, String>,
     _assets: TempDir,
     /// Held for the life of the test — see [`ONE_AT_A_TIME`].
-    _exclusive: std::sync::MutexGuard<'static, ()>,
+    _exclusive: tokio::sync::MutexGuard<'static, ()>,
 }
 
 impl Packaged {
     async fn start() -> Self {
-        let exclusive = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+        let exclusive = ONE_AT_A_TIME.lock().await;
 
         // A packaged application serves assets staged out of its binary; this
         // stands in for that, so the static path is exercised as an absolute
@@ -309,10 +308,7 @@ fn dechunk(body: &str, headers: &[(String, String)]) -> String {
 
     let mut out = String::new();
     let mut rest = body;
-    loop {
-        let Some((size, remainder)) = rest.split_once("\r\n") else {
-            break;
-        };
+    while let Some((size, remainder)) = rest.split_once("\r\n") {
         let Ok(size) = usize::from_str_radix(size.trim(), 16) else {
             break;
         };

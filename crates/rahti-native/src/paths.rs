@@ -44,6 +44,9 @@ use std::path::{Path, PathBuf};
 use crate::error::NativeError;
 use crate::platform::Platform;
 
+const PUBLIC_DIR_ENV: &str = "RAHTI_PUBLIC_DIR";
+const SPILL_DIR_ENV: &str = "RAHTI_SPILL_DIR";
+
 /// Overrides [`AppPaths::data`]. Set by an Android host, and by tests.
 pub const DATA_DIR_ENV: &str = "RAHTI_NATIVE_DATA_DIR";
 /// Overrides [`AppPaths::config`].
@@ -265,8 +268,8 @@ impl AppPaths {
         // before the router is built — the same single-threaded moment `main`
         // sets anything else.
         unsafe {
-            std::env::set_var(rahti::PUBLIC_DIR_ENV, public);
-            std::env::set_var(rahti::SPILL_DIR_ENV, self.spill());
+            std::env::set_var(PUBLIC_DIR_ENV, public);
+            std::env::set_var(SPILL_DIR_ENV, self.spill());
         }
     }
 

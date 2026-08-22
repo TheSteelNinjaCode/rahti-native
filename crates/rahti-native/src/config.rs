@@ -459,20 +459,20 @@ impl NativeConfig {
             .split(';')
             .map(str::trim)
             .find(|directive| directive.starts_with("script-src"));
-        if let Some(scripts) = scripts {
-            if !scripts.contains("'unsafe-eval'") {
-                return Err(fail(format!(
-                    "`security.csp` has `{scripts}`, and PulsePoint cannot run under it.\n  \
-                     It compiles the expressions in a reactive block at runtime, with \
-                     `new Function` — which a Content-Security-Policy counts as evaluating a \
-                     string as JavaScript.\n  \
-                     Without `'unsafe-eval'` the page renders and every binding on it is \
-                     dead, reporting an EvalError from inside the runtime bundle.\n  \
-                     Add `'unsafe-eval'` to `script-src`. It stays narrow: `script-src` still \
-                     refuses every *source* but this origin, so injected markup cannot load \
-                     an attacker's file."
-                )));
-            }
+        if let Some(scripts) = scripts
+            && !scripts.contains("'unsafe-eval'")
+        {
+            return Err(fail(format!(
+                "`security.csp` has `{scripts}`, and PulsePoint cannot run under it.\n  \
+                 It compiles the expressions in a reactive block at runtime, with \
+                 `new Function` — which a Content-Security-Policy counts as evaluating a \
+                 string as JavaScript.\n  \
+                 Without `'unsafe-eval'` the page renders and every binding on it is \
+                 dead, reporting an EvalError from inside the runtime bundle.\n  \
+                 Add `'unsafe-eval'` to `script-src`. It stays narrow: `script-src` still \
+                 refuses every *source* but this origin, so injected markup cannot load \
+                 an attacker's file."
+            )));
         }
 
         Ok(())

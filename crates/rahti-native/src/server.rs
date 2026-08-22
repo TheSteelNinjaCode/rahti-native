@@ -183,19 +183,17 @@ impl RunningServer {
 
     /// Stop accepting, let open work finish, and end.
     ///
-    /// Two signals, because they stop two different things. Rahti's shutdown
-    /// broadcast tells every long-lived response — the dev event stream, every
-    /// open WebSocket — to close, and the oneshot tells Axum to stop accepting
-    /// and wait for what is left. Without the first, the second would wait for
-    /// connections that were never going to end.
+    /// The host must first signal its application's framework shutdown
+    /// broadcast, which closes long-lived responses such as the dev event
+    /// stream and WebSockets. This method then tells Axum to stop accepting and
+    /// waits for what is left. Keeping the framework signal in the host makes
+    /// it use the application's Rahti version rather than a second copy linked
+    /// by this platform-neutral crate.
     ///
     /// `grace` bounds that wait. Whatever is still open when it expires is
     /// abandoned, because a window the user closed must not leave a process
     /// behind.
     pub async fn shutdown(mut self, grace: Duration) -> Result<(), NativeError> {
-        // Every `rahti::watch_shutdown()` holder, first.
-        rahti::begin_shutdown();
-
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }

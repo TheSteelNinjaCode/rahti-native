@@ -215,10 +215,10 @@ fn webview2() -> Finding {
     }
 
     for key in KEYS {
-        if let Some(output) = run(Command::new("reg").args(["query", key, "/v", "pv"])) {
-            if let Some(version) = output.split_whitespace().last() {
-                return Finding::ok("WebView2 runtime", version.to_string());
-            }
+        if let Some(output) = run(Command::new("reg").args(["query", key, "/v", "pv"]))
+            && let Some(version) = output.split_whitespace().last()
+        {
+            return Finding::ok("WebView2 runtime", version.to_string());
         }
     }
 

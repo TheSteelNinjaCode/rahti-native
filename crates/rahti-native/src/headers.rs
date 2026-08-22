@@ -59,12 +59,11 @@ pub async fn security_headers(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
 
-    if let Some(policy) = csp() {
-        if !headers.contains_key(header::CONTENT_SECURITY_POLICY) {
-            if let Ok(value) = HeaderValue::from_str(policy) {
-                headers.insert(header::CONTENT_SECURITY_POLICY, value);
-            }
-        }
+    if let Some(policy) = csp()
+        && !headers.contains_key(header::CONTENT_SECURITY_POLICY)
+        && let Ok(value) = HeaderValue::from_str(policy)
+    {
+        headers.insert(header::CONTENT_SECURITY_POLICY, value);
     }
 
     // A stylesheet that a browser decided was HTML is a stylesheet that can

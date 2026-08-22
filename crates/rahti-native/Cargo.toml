@@ -12,11 +12,6 @@ rust-version.workspace = true
 # The router this crate serves, and the response types the loopback gate
 # returns. Already in every Rahti application's tree.
 axum = "0.8.9"
-# `default-features = false` drops `notify`: a packaged application's assets
-# are written out of the binary into internal storage, so there is nothing to
-# watch, and the dependency should leave the Android build rather than be
-# compiled and not called. See the `dev-watch` feature on `rahti`.
-rahti = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The launch token and the per-installation session key are asked of the

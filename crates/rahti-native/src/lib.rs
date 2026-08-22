@@ -73,6 +73,8 @@ mod platform;
 mod secret;
 mod server;
 
+const DEV_ENV: &str = "RAHTI_DEV";
+
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 mod tests;
@@ -113,6 +115,6 @@ pub fn harden_release() {
     // before the router is built, which is the same single-threaded moment
     // `main` sets anything else.
     unsafe {
-        std::env::set_var(rahti::DEV_ENV, "0");
+        std::env::set_var(DEV_ENV, "0");
     }
 }

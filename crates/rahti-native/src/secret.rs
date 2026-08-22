@@ -42,6 +42,9 @@ use std::path::Path;
 use crate::error::NativeError;
 use crate::paths::AppPaths;
 
+const AUTH_SECRET_ENV: &str = "AUTH_SECRET";
+const AUTH_COOKIE_ENV: &str = "AUTH_COOKIE_NAME";
+
 /// The file, under [`AppPaths::data`].
 pub const SECRET_FILE: &str = "session.key";
 
@@ -87,9 +90,9 @@ pub fn install_session_secret(
     // the router is built — the same single-threaded moment `main` sets
     // anything else.
     unsafe {
-        std::env::set_var(rahti::auth::SECRET_ENV, secret);
+        std::env::set_var(AUTH_SECRET_ENV, secret);
         if let Some(name) = cookie_name {
-            std::env::set_var(rahti::auth::COOKIE_ENV, name);
+            std::env::set_var(AUTH_COOKIE_ENV, name);
         }
     }
     Ok(())
@@ -175,7 +178,7 @@ mod dpapi {
     /// protect the first one would have to be stored beside it, which protects
     /// nothing. The user account *is* the key.
     pub fn protect(plain: &[u8]) -> Option<Vec<u8>> {
-        let mut input = blob(plain);
+        let input = blob(plain);
         let mut output = CRYPT_INTEGER_BLOB {
             cbData: 0,
             pbData: std::ptr::null_mut(),
@@ -186,7 +189,7 @@ mod dpapi {
         // "absent". `output` is written by the call and freed below.
         let ok = unsafe {
             CryptProtectData(
-                &mut input,
+                &input,
                 std::ptr::null(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
@@ -199,7 +202,7 @@ mod dpapi {
     }
 
     pub fn unprotect(sealed: &[u8]) -> Option<Vec<u8>> {
-        let mut input = blob(sealed);
+        let input = blob(sealed);
         let mut output = CRYPT_INTEGER_BLOB {
             cbData: 0,
             pbData: std::ptr::null_mut(),
@@ -208,7 +211,7 @@ mod dpapi {
         // SAFETY: as above.
         let ok = unsafe {
             CryptUnprotectData(
-                &mut input,
+                &input,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),

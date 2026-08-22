@@ -378,6 +378,27 @@ fn the_shell_binds_and_serves_before_it_opens_a_window() {
 }
 
 #[test]
+fn shutdown_signals_the_applications_rahti_runtime_first() {
+    let fixture = Fixture::new();
+    crate::init::run(&fixture.project(), &first_run()).expect("a first run");
+    let lib = fixture.read("native/src/lib.rs");
+
+    let stop = lib.find("fn stop(").expect("a stop function");
+    let stop_body = &lib[stop..];
+    let framework = stop_body
+        .find("my_app::rahti::begin_shutdown()")
+        .expect("the application's shutdown broadcast");
+    let server = stop_body
+        .find("server.shutdown(")
+        .expect("the server shutdown");
+
+    assert!(
+        framework < server,
+        "the server stopped before the application's long-lived responses"
+    );
+}
+
+#[test]
 fn the_loopback_gate_is_wired_when_the_configuration_asks_for_it() {
     let fixture = Fixture::new();
     crate::init::run(&fixture.project(), &first_run()).expect("a first run");

@@ -74,9 +74,11 @@ is a rule users read.
 
 `initialize_application` and its `StartupError`, `rahti::begin_shutdown`, the
 `dev-watch` feature, and the `cargo rahti native` delegation in `cargo-rahti`
-are all in the `rahti-dev` workspace. This repository depends on them; it does
-not own them. A change needed here that belongs there is made there and
-released with the framework.
+are all in the `rahti-dev` workspace. The generated shell calls them through
+the application's `pub use rahti` re-export; `rahti-native` must not link its
+own production copy, because two framework versions have two shutdown globals.
+A change needed here that belongs there is made there and released with the
+framework.
 
 ## Commands
 
@@ -94,11 +96,12 @@ installer was produced.
 
 ## Building against the framework
 
-`[workspace.dependencies] rahti` carries both a `version` and a `path`. The
-path is what makes this build today; the version is what makes it publishable.
+`[workspace.dependencies] rahti` carries both a `version` and a `path` for the
+runtime's integration tests. It is a dev-dependency, not something linked into
+a packaged application. The path is what makes those tests build today; the
+version is what makes the published dev-dependency resolvable.
 
-It requires `0.0.18` exactly — the first release carrying `begin_shutdown`, the
-`dev-watch` feature and the scaffold's `initialize_application`. The path names
-`../rahti`, the **publishing** checkout, not `../rahti-dev` where framework
-work happens: what this builds against should be what actually ships. That
-release has to land before this package can. See `PUBLISHING.md`.
+It requires `0.0.21`, matching the current publishing checkout. The path names
+`../rahti`, not `../rahti-dev` where framework work happens: what these tests
+run against should be what actually ships. That release has to land before
+this package can. See `PUBLISHING.md`.

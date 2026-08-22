@@ -9,42 +9,47 @@ cargo publish -p cargo-rahti-native
 
 The order is forced by the dependency: the CLI depends on the runtime.
 
-## Before the first release
+## Framework prerequisite
 
-**`rahti` 0.0.18 has to be on crates.io first.** This package requires it
-exactly, because it is the first release carrying the three things this package
-calls and nothing in the 0.0.17 line has them:
+**`rahti` 0.0.21 has to be on crates.io first.** The runtime's integration
+tests use that release as a dev-dependency, and the generated shell relies on
+the scaffold contract it supplies:
 
 | Needs | Why |
 | --- | --- |
-| `rahti::begin_shutdown` | A packaged GUI never receives Ctrl+C and Android's lifecycle has nothing like it, so the host says when to stop. |
-| the `dev-watch` cargo feature | Turned off, so `notify` leaves the Android build rather than being compiled and never called. |
+| the application's `rahti::begin_shutdown` | A packaged GUI never receives Ctrl+C, so the generated host signals the exact framework instance the application uses. |
+| the `dev-watch` cargo feature | Disabled in the integration tests that exercise packaged behavior. |
 | `initialize_application` in the scaffold | The shell calls it; Android has no `main` to reach. |
 
-All three are in the `../rahti` publishing checkout, staged for its `0.0.18`
-release. Until that release is live, this package builds only beside that
-checkout, through the `path` in `[workspace.dependencies]`.
+All three are in the `../rahti` publishing checkout at `0.0.21`. Until that
+release is live, the tests build beside that checkout through the `path` in
+`[workspace.dependencies]`.
 
 So the release order across the two repositories is:
 
-1. `rahti` 0.0.18 — `rahti-macros`, `rahti-build`, `rahti`, `cargo-rahti`.
-2. `rahti-native` 0.0.1 — `rahti-native`, then `cargo-rahti-native`.
+1. `rahti` 0.0.21 — `rahti-macros`, `rahti-build`, `rahti`, `cargo-rahti`.
+2. `rahti-native` 0.0.2 — `rahti-native`, then `cargo-rahti-native`.
 
 ## The `rahti` dependency
 
 ```toml
-rahti = { version = "0.0.18", path = "../rahti/crates/rahti", default-features = false }
+rahti = { version = "0.0.21", path = "../rahti/crates/rahti", default-features = false }
 ```
 
-`version` is what makes it publishable — cargo refuses a path-only dependency
-on publish — and `path` is what makes a side-by-side checkout build before that
-version exists. Cargo uses the path locally and the version once published.
+This is a dev-dependency of `rahti-native`, used by its integration tests. It
+must not become a normal dependency: an application already links Rahti, and a
+second version would carry an independent shutdown broadcast. The generated
+shell calls `begin_shutdown` through the application's framework re-export.
+
+`version` makes the published dev-dependency resolvable, and `path` makes the
+side-by-side checkout build before that version exists. Cargo uses the path
+locally and the version once published.
 
 The path names `../rahti`, the publishing checkout — not `../rahti-dev`, where
 framework work happens. What this builds against should be what actually ships.
 
 A clone that does not sit beside it should delete the `path` and let cargo
-resolve `0.0.18` from crates.io.
+resolve `0.0.21` from crates.io.
 
 ## Version
 
