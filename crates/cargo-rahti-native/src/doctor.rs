@@ -143,16 +143,57 @@ fn native_shell(project: &Project) -> Finding {
 /// than one prerequisite that is checked and named.
 fn tauri_cli() -> Finding {
     match run(&mut cargo_tauri(&["--version"])) {
-        Some(version) => Finding::ok("cargo tauri", version.trim().to_string()),
+        Some(version) if supported_tauri_cli(&version) => {
+            Finding::ok("cargo tauri", version.trim().to_string())
+        }
+        Some(version) => Finding::missing(
+            "cargo tauri",
+            format!(
+                "{} is installed, but Rahti native development needs Tauri CLI 2.8 or newer.\n   \
+                 Version 2.8 added the external watch folders that make changes in the Rahti\n   \
+                 application outside native/ rebuild and restart the package.\n   \
+                 Fix: cargo install tauri-cli --version \"^2.8\" --locked --force",
+                version.trim()
+            ),
+        ),
         None => Finding::missing(
             "cargo tauri",
             "Rahti delegates packaging to Tauri's own CLI, which is not installed.\n   \
              It is a separate tool so that it can track the `tauri` version in native/Cargo.toml,\n   \
              which is yours to upgrade.\n   \
-             Fix: cargo install tauri-cli --version \"^2\" --locked",
+             Fix: cargo install tauri-cli --version \"^2.8\" --locked",
         ),
     }
 }
+
+fn supported_tauri_cli(output: &str) -> bool {
+    let Some(version) = output
+        .split_whitespace()
+        .find(|part| part.chars().next().is_some_and(|c| c.is_ascii_digit()))
+    else {
+        return false;
+    };
+    let mut numbers = version.split('.').filter_map(|part| {
+        let digits: String = part
+            .chars()
+            .take_while(|character| character.is_ascii_digit())
+            .collect();
+        (!digits.is_empty())
+            .then(|| digits.parse::<u64>().ok())
+            .flatten()
+    });
+    let Some(major) = numbers.next() else {
+        return false;
+    };
+    let Some(minor) = numbers.next() else {
+        return false;
+    };
+    major == 2 && minor >= 8
+}
+
+#[cfg(test)]
+#[path = "tests/doctor.rs"]
+mod tests;
 
 // -------------------------------------------------------------- windows
 

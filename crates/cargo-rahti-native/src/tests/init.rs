@@ -344,6 +344,24 @@ fn the_shell_links_the_projects_own_library() {
 }
 
 #[test]
+fn the_shell_rebuilds_and_restages_changed_public_assets() {
+    let fixture = Fixture::new();
+    crate::init::run(&fixture.project(), &first_run()).expect("a first run");
+
+    let build = fixture.read("native/build.rs");
+    assert!(build.contains("cargo:rerun-if-changed="), "{build}");
+    assert!(build.contains("../public"), "{build}");
+    assert!(build.contains("RAHTI_NATIVE_ASSET_FINGERPRINT"), "{build}");
+
+    let shell = fixture.read("native/src/lib.rs");
+    assert!(shell.contains("const ASSET_FINGERPRINT"), "{shell}");
+    assert!(
+        shell.contains("stage_embedded_assets(&assets, &paths.public(), ASSET_FINGERPRINT)"),
+        "{shell}"
+    );
+}
+
+#[test]
 fn the_shell_binds_and_serves_before_it_opens_a_window() {
     // The startup race, asserted on the generated source: a WebView told to
     // load a port nothing is listening on shows a blank window and no error.

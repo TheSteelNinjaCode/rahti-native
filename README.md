@@ -33,7 +33,7 @@ cargo install cargo-rahti-native
 Packaging itself is delegated to Tauri's own CLI, which is a separate install:
 
 ```bash
-cargo install tauri-cli --version "^2" --locked
+cargo install tauri-cli --version "^2.8" --locked
 ```
 
 Two tools rather than one because the Tauri CLI has to match the `tauri`
@@ -89,7 +89,7 @@ document `cargo rahti new` ships into a project's `docs/conventions/`.
 
 ## Status
 
-Early — `0.0.2`. It has its own release line rather
+Early — `0.0.3`. It has its own release line rather
 than tracking the framework's: the two are separate installs and you upgrade
 them separately. See [`PUBLISHING.md`](PUBLISHING.md).
 

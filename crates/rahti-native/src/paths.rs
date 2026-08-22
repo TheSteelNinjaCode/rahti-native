@@ -296,7 +296,7 @@ pub struct EmbeddedAsset<'a> {
     pub bytes: &'a [u8],
 }
 
-/// Write the embedded assets into internal storage, once per version.
+/// Write the embedded assets into internal storage, once per asset version.
 ///
 /// ## Why the assets are in the binary
 ///
@@ -375,7 +375,7 @@ pub fn stage_embedded_assets(
     Ok(true)
 }
 
-/// Copy the package's public assets into internal storage, once per version.
+/// Copy the package's public assets into internal storage, once per asset version.
 ///
 /// Android needs this: the files in an APK are entries in a zip, not paths a
 /// `ServeDir` can open. Windows does not need it and does it anyway, so that

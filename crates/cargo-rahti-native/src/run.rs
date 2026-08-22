@@ -36,6 +36,7 @@ pub fn dev(project: &Project, config: &NativeConfig, args: &Dev) -> Result<(), N
         _ => &["dev"],
     });
     command.current_dir(project.native_dir());
+    add_application_watch_folders(&mut command, project, args.target);
 
     if let Some(device) = &args.device {
         command.arg(device);
@@ -49,6 +50,40 @@ pub fn dev(project: &Project, config: &NativeConfig, args: &Dev) -> Result<(), N
     println!("  running {}", describe(&command));
     println!();
     execute(command, "dev")
+}
+
+/// Teach Tauri about the application outside the shell's own workspace.
+///
+/// `native/` is deliberately its own Cargo workspace, so Tauri discovers no
+/// path dependency to watch above it. Without these explicit paths, editing a
+/// page or component leaves the running native application unchanged.
+///
+/// Windows does not watch `public/` here: the embedded Rahti server serves the
+/// checkout directly and swaps CSS or reloads the WebView itself. Android
+/// cannot read a host path, so a public-asset change has to rebuild, reinstall
+/// and restart the debug application with a new embedded asset tree.
+fn add_application_watch_folders(command: &mut Command, project: &Project, target: Platform) {
+    for path in application_watch_folders(project, target) {
+        command.arg("--additional-watch-folders").arg(path);
+    }
+}
+
+pub(crate) fn application_watch_folders(project: &Project, target: Platform) -> Vec<PathBuf> {
+    let mut candidates = vec![
+        project.root.join("src"),
+        project.root.join("Cargo.toml"),
+        project.root.join("Cargo.lock"),
+        project.root.join("build.rs"),
+        project.root.join("rahti.config.json"),
+        project.root.join(".env"),
+    ];
+
+    if target == Platform::Android {
+        candidates.push(project.root.join("public"));
+    }
+
+    candidates.retain(|path| path.exists());
+    candidates
 }
 
 pub fn build(project: &Project, config: &NativeConfig, args: &Build) -> Result<(), NativeError> {
@@ -598,7 +633,7 @@ fn execute(mut command: Command, what: &str) -> Result<(), NativeError> {
             "tauri",
             format!(
                 "could not run `cargo tauri`: {e}\n  \
-                 Install it with: cargo install tauri-cli --version \"^2\" --locked"
+                 Install it with: cargo install tauri-cli --version \"^2.8\" --locked"
             ),
         )
     })?;

@@ -215,7 +215,7 @@ BUILD:
 PREREQUISITES:
     Packaging is delegated to Tauri's own CLI, which is a separate install:
 
-        cargo install tauri-cli --version \"^2\" --locked
+        cargo install tauri-cli --version \"^2.8\" --locked
 
     `cargo rahti native doctor` checks for it, and for the Android SDK, NDK,
     JDK and Rust targets when Android is a target.

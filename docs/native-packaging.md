@@ -34,7 +34,7 @@ cargo install cargo-rahti-native
 It delegates the packaging itself to Tauri's own CLI, which is another:
 
 ```text
-cargo install tauri-cli --version "^2" --locked
+cargo install tauri-cli --version "^2.8" --locked
 ```
 
 Two tools rather than one because the Tauri CLI has to match the `tauri`
@@ -62,6 +62,34 @@ subcommand dispatch. If the helper is not installed, `cargo rahti native`
 prints the one line that installs it and does nothing else.
 
 `build` prints the absolute path of every artifact it produced.
+
+## Development reload
+
+`dev` stays running and watches the application as well as the generated
+native shell. What happens after a save depends on what changed and where the
+application is running:
+
+| Change | Windows | Android |
+| --- | --- | --- |
+| `src/`, `Cargo.toml`, `Cargo.lock`, `build.rs`, `rahti.config.json`, `.env` | Rebuild and restart the native application. | Rebuild, reinstall and restart it on the selected device. |
+| `public/*.css` | Swap the stylesheet in the existing WebView. | Rebuild, reinstall and restart with new embedded assets. |
+| Another file under `public/` | Reload the existing WebView. | Rebuild, reinstall and restart with new embedded assets. |
+
+Rust is compiled into the application, so this is restart-based live reload,
+not state-preserving hot-module replacement. Windows asset edits are the fast
+case because the debug process can serve the checkout directly. Android
+cannot read a directory on the development machine: its assets have to cross
+the package boundary, so the automatic loop takes as long as an incremental
+Android build and deployment.
+
+The application is outside `native/`'s deliberately separate Cargo workspace.
+Tauri CLI 2.8 introduced the additional watch folders needed to observe it;
+`doctor` refuses an older CLI and prints the upgrade command.
+
+An existing project gets this behavior after updating `cargo-rahti-native` and
+running `cargo rahti native init` again. Untouched generated shell files are
+updated; an application-owned file you edited remains yours and is reported,
+as usual.
 
 ## Your application has to expose its startup
 
@@ -196,9 +224,12 @@ beside a current `main.js` fails in ways nothing explains — and touches nothin
 else: the staged tree is a subdirectory of the data directory, and the
 database, the uploads and the key are its siblings.
 
-A **debug** build serves your project's own `public/` directly instead, so a
-stylesheet edit is visible without a rebuild. A release package never looks at
-that path and so never depends on the machine that built it.
+A **Windows debug** build serves your project's own `public/` directly, so a
+stylesheet edit is visible without a rebuild. Android cannot reach that host
+path; its debug build uses the embedded tree and `native dev` rebuilds and
+redeploys it after an asset edit. A content fingerprint replaces the staged
+tree even when the application version did not change. A release package never
+looks at the host path and so never depends on the machine that built it.
 
 ### Android and cleartext
 
