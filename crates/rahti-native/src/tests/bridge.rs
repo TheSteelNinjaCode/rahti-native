@@ -62,6 +62,28 @@ fn the_script_attaches_to_pulsepoint_without_editing_it() {
     assert!(js.contains("window.rahtiNative = api"), "{js}");
 }
 
+#[test]
+fn blank_links_work_without_a_second_webview() {
+    let js = script();
+    assert!(
+        js.contains("String(anchor.target).toLowerCase() !== \"_blank\""),
+        "{js}"
+    );
+    assert!(js.contains("url.origin === window.location.origin"), "{js}");
+    assert!(
+        js.contains("api.invoke(\"open_external\", { url: url.href })"),
+        "{js}"
+    );
+}
+
+#[test]
+fn only_pages_using_popovers_warn_about_an_old_webview() {
+    let js = script();
+    assert!(js.contains("HTMLElement.prototype.showPopover"), "{js}");
+    assert!(js.contains("document.querySelector(\"[popover]\")"), "{js}");
+    assert!(js.contains("rahti-webview-compatibility"), "{js}");
+}
+
 #[tokio::test]
 async fn the_route_serves_it_as_javascript_and_never_from_a_cache() {
     use axum::body::Body;

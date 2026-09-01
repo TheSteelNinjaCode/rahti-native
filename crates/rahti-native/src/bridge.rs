@@ -115,6 +115,68 @@ pub fn bridge_script(platform: &str, version: &str) -> String {
   // `window` *is* reachable from inside a compiled block, so this is.
   window.rahtiNative = api;
 
+  // A target=_blank navigation requests another WebView. Android has no
+  // supported new-window hook and desktop WebViews may discard the request,
+  // so keep internal links in this window and hand external ones to the
+  // deliberately narrow native opener.
+  document.addEventListener("click", function (event) {{
+    if (event.defaultPrevented || event.button !== 0) return;
+
+    var target = event.target;
+    if (target && target.nodeType !== 1) target = target.parentElement;
+    var anchor = target && target.closest ? target.closest("a[href]") : null;
+    if (!anchor || String(anchor.target).toLowerCase() !== "_blank") return;
+
+    var url;
+    try {{
+      url = new URL(anchor.href, window.location.href);
+    }} catch (_) {{
+      return;
+    }}
+
+    if (url.origin === window.location.origin) {{
+      event.preventDefault();
+      window.location.href = url.href;
+      return;
+    }}
+    if (["http:", "https:", "mailto:"].indexOf(url.protocol) === -1) return;
+
+    event.preventDefault();
+    api.invoke("open_external", {{ url: url.href }}).catch(function () {{
+      // The shell's navigation hook applies the same URL allowlist. This is a
+      // safe fallback if Tauri's bridge was unavailable during an early tap.
+      window.location.href = url.href;
+    }});
+  }}, true);
+
+  // Popover is the only hard browser feature used by Rahti UI's overlay
+  // components. Do not impose it on applications that render no popover; if
+  // one is present, explain an old system WebView instead of leaving controls
+  // that silently do nothing.
+  function explainOldWebView() {{
+    if (typeof HTMLElement !== "undefined" &&
+        typeof HTMLElement.prototype.showPopover === "function") return;
+    if (!document.body || !document.querySelector("[popover]")) return;
+    if (document.getElementById("rahti-webview-compatibility")) return;
+
+    var notice = document.createElement("div");
+    notice.id = "rahti-webview-compatibility";
+    notice.setAttribute("role", "alert");
+    notice.setAttribute("style",
+      "position:fixed;z-index:2147483647;inset:0 0 auto 0;padding:12px 16px;" +
+      "background:#7f1d1d;color:white;font:14px/1.4 system-ui;text-align:center");
+    notice.textContent =
+      "This device's WebView is too old for this application's overlays. " +
+      "Update Android System WebView or the WebView2 Runtime.";
+    document.body.prepend(notice);
+  }}
+
+  if (document.readyState === "loading") {{
+    document.addEventListener("DOMContentLoaded", explainOldWebView);
+  }} else {{
+    explainOldWebView();
+  }}
+
   // Best-effort, and documented nowhere as the way in: in a context where
   // `pp` *is* the global object, `pp.native` also works and reads a little
   // better. Nothing depends on it succeeding.

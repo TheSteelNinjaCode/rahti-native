@@ -397,7 +397,10 @@ use tauri::{{Manager, WebviewUrl, WebviewWindowBuilder}};
 
 /// Written from rahti.native.json. Regenerate with `cargo rahti native init`.
 const IDENTIFIER: &str = {identifier};
-const VERSION: &str = {version};
+// Cargo.toml is generated from rahti.native.json too. Reading its package
+// version here leaves one source of truth instead of a second literal that can
+// drift from the bundle metadata.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 const WINDOW_TITLE: &str = {title};
 const WINDOW_WIDTH: f64 = {width}.0;
 const WINDOW_HEIGHT: f64 = {height}.0;
@@ -717,7 +720,6 @@ async fn choose_file(app: tauri::AppHandle, extensions: Option<Vec<String>>) -> 
 }}
 "#,
         identifier = json(&config.identifier),
-        version = json(&config.version),
         title = json(&config.window.title),
         width = config.window.width,
         height = config.window.height,

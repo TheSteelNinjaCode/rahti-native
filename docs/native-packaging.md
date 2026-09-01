@@ -19,6 +19,13 @@ streaming rpcs, uploads, sockets, sessions and PulsePoint bindings all work,
 because none of them are involved. There is nothing to convert and no
 compatibility subset.
 
+The system WebView still has to implement the browser features the application
+uses. Rahti UI's overlay components require the Popover API. The injected
+native bridge detects that specific case: an application that renders a
+`popover` on an older engine gets a visible instruction to update Android
+System WebView or WebView2, while an application that uses no popover receives
+no warning.
+
 **It is not an HTML-to-native-widget compiler.** Nothing here translates
 markup. What the user sees is a WebView, and the controls in it are the
 browser's, not the platform's.
@@ -345,6 +352,12 @@ executables.
 A link to anywhere else opens in the user's browser and the window stays where
 it is. A privileged WebView that navigated to an external page would be running
 somebody else's HTML with the bridge attached.
+
+The bridge also handles authored `<a target="_blank">` links. A new WebView is
+not supported consistently on Android and can be discarded on desktop, so an
+external target is passed to `open_external`; a same-origin target stays in the
+application's existing window. The source remains ordinary web markup and
+keeps its normal new-tab behavior outside the native package.
 
 Adding a command means three places, on purpose: a `#[tauri::command]` in
 `native/src/lib.rs`, an entry in `rahti_native::commands()`, and a permission

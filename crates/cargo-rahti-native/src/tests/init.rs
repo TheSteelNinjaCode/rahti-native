@@ -344,6 +344,25 @@ fn the_shell_links_the_projects_own_library() {
 }
 
 #[test]
+fn the_shell_reads_the_version_from_its_package_manifest() {
+    let fixture = Fixture::new();
+    crate::init::run(&fixture.project(), &first_run()).expect("a first run");
+
+    let manifest = fixture.read("native/Cargo.toml");
+    assert!(manifest.contains("version = \"0.3.0\""), "{manifest}");
+
+    let shell = fixture.read("native/src/lib.rs");
+    assert!(
+        shell.contains("const VERSION: &str = env!(\"CARGO_PKG_VERSION\");"),
+        "{shell}"
+    );
+    assert!(
+        !shell.contains("const VERSION: &str = \"0.3.0\";"),
+        "{shell}"
+    );
+}
+
+#[test]
 fn the_shell_rebuilds_and_restages_changed_public_assets() {
     let fixture = Fixture::new();
     crate::init::run(&fixture.project(), &first_run()).expect("a first run");
