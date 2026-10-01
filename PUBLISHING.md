@@ -11,7 +11,7 @@ The order is forced by the dependency: the CLI depends on the runtime.
 
 ## Framework prerequisite
 
-**`rahti` 0.0.38 has to be on crates.io first.** The runtime's integration
+**`rahti` 0.0.39 has to be on crates.io first.** The runtime's integration
 tests use that release as a dev-dependency, and the generated shell relies on
 the scaffold contract it supplies:
 
@@ -21,19 +21,19 @@ the scaffold contract it supplies:
 | the `dev-watch` cargo feature | Disabled in the integration tests that exercise packaged behavior. |
 | `initialize_application` in the scaffold | The shell calls it; Android has no `main` to reach. |
 
-All three are in the `../rahti` publishing checkout at `0.0.38`. Until that
+All three are in the `../rahti` publishing checkout at `0.0.39`. Until that
 release is live, the tests build beside that checkout through the `path` in
 `[workspace.dependencies]`.
 
 So the release order across the two repositories is:
 
-1. `rahti` 0.0.38 — `rahti-macros`, `rahti-build`, `rahti`, `cargo-rahti`.
-2. `rahti-native` 0.0.9 — `rahti-native`, then `cargo-rahti-native`.
+1. `rahti` 0.0.39 — `rahti-macros`, `rahti-build`, `rahti`, `cargo-rahti`.
+2. `rahti-native` 0.0.10 — `rahti-native`, then `cargo-rahti-native`.
 
 ## The `rahti` dependency
 
 ```toml
-rahti = { version = "0.0.38", path = "../rahti/crates/rahti", default-features = false }
+rahti = { version = "0.0.39", path = "../rahti/crates/rahti", default-features = false }
 ```
 
 This is a dev-dependency of `rahti-native`, used by its integration tests. It
@@ -49,7 +49,7 @@ The path names `../rahti`, the publishing checkout — not `../rahti-dev`, where
 framework work happens. What this builds against should be what actually ships.
 
 A clone that does not sit beside it should delete the `path` and let cargo
-resolve `0.0.38` from crates.io.
+resolve `0.0.39` from crates.io.
 
 ## Version
 
