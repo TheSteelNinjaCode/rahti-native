@@ -34,14 +34,14 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// A page, as `app/page.rs` writes one.
 async fn page() -> Html {
-    html! {r##"
+    html! {
         <html lang="en">
             <body>
-                <h1>Embedded</h1>
+                <h1>"Embedded"</h1>
                 <script type="module" src="/js/main.js"></script>
             </body>
         </html>
-    "##}
+    }
 }
 
 /// An ordinary rpc — the CSRF path.
