@@ -23,7 +23,7 @@ members = ["crates/cargo-rahti-native", "crates/rahti-native"]
 version = "0.0.22"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/jeffersonabraham/rahti-native"
+repository = "https://github.com/TheSteelNinjaCode/rahti-native"
 rust-version = "1.97"
 
 [workspace.dependencies]
