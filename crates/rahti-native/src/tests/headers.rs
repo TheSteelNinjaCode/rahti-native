@@ -72,15 +72,12 @@ fn the_default_policy_covers_what_a_rahti_page_actually_loads() {
 
     // Every script is same-origin, so no external source is permitted.
     assert!(csp.contains("script-src 'self'"), "{csp}");
-    // And `'unsafe-eval'`, which is not an oversight: PulsePoint builds a
-    // render function with `new Function` when it compiles a reactive block.
-    // Without it the server-rendered page appears and every binding on it is
-    // dead, with an `EvalError` from inside the minified bundle — which reads
-    // as a PulsePoint bug rather than as a policy somebody tightened.
-    assert!(
-        csp.contains("'unsafe-eval'"),
-        "the default policy would stop PulsePoint compiling any binding: {csp}"
-    );
+    // Nothing evaluated and nothing inline: PulsePoint runs only the client
+    // registry the application compiled, and only its Trusted Types policy
+    // may write markup.
+    assert!(!csp.contains("unsafe-eval"), "{csp}");
+    assert!(csp.contains("require-trusted-types-for 'script'"), "{csp}");
+    assert!(csp.contains("trusted-types pulsepoint"), "{csp}");
     // `pp.rpc`, a streaming response, and a `#[socket]` connection.
     assert!(csp.contains("connect-src"), "{csp}");
     assert!(csp.contains("ws:"), "{csp}");

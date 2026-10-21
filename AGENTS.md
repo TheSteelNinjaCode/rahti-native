@@ -54,11 +54,12 @@ is a rule users read.
 9. Never write a credential to `rahti.native.json`, to `tauri.conf.json`, or to
    any file this tool generates outside the ignored `gen/`. Signing comes from
    `RAHTI_NATIVE_*` environment variables. `AUTH_SECRET` is not read at all.
-10. The default Content-Security-Policy must keep `'unsafe-eval'` in
-    `script-src`. PulsePoint compiles reactive expressions with `new Function`;
-    without it the server-rendered page appears and every binding on it is
-    dead, reporting an `EvalError` from inside a minified bundle. Narrowing it
-    is not a tightening, it is turning the browser layer off.
+10. The default Content-Security-Policy is `script-src 'self'` with
+    `require-trusted-types-for 'script'; trusted-types pulsepoint`, the policy
+    a Rahti web deployment sends. PulsePoint runs only the client registry the
+    application compiled, so nothing needs `'unsafe-eval'` or
+    `'unsafe-inline'`, and `NativeConfig::validate` refuses both: either lets
+    an XSS run script that reaches the command bridge.
 11. An application's `public/` is compiled into the shell's binary and written
     to internal storage on first launch. Android's package resources are zip
     entries and Tauri reports their directory as the URI `asset://localhost/`,

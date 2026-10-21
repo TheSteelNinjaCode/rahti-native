@@ -240,26 +240,19 @@ impl Default for SecurityConfig {
 
 /// `default-src 'self'` and nothing external.
 ///
-/// ## `'unsafe-eval'`, and why it is not optional here
+/// ## No `'unsafe-eval'`, no inline script, and Trusted Types
 ///
-/// PulsePoint compiles the expressions in a reactive block at runtime: it
-/// parses them and builds a render function with `new Function`, which the CSP
-/// counts as evaluating a string as JavaScript. That is what makes it a
-/// browser runtime rather than a build step, and it is not something a
-/// configuration option turns off.
+/// PulsePoint never turns page text into code: every binding, handler and
+/// component script is compiled when the application is built, and the page
+/// loads that client registry from this origin. So `script-src 'self'` is the
+/// whole of what the application needs, and anything wider — `'unsafe-eval'`,
+/// `'unsafe-inline'` — only gives injected markup a way to run script. In a
+/// native shell that script would reach the command bridge, which is why
+/// [`NativeConfig::validate`] refuses both.
 ///
-/// Without the directive the page still renders — the document is
-/// server-rendered — and every binding on it is dead, reporting
-/// `EvalError: … violates the following Content Security Policy directive`
-/// from inside the minified bundle. Which is a failure worth naming, because
-/// the sentence "tighten the CSP" is otherwise an obvious-looking change that
-/// breaks the whole browser layer of the application in a way that reads as a
-/// PulsePoint bug.
-///
-/// It is narrower than it sounds: `script-src` still refuses every *source*
-/// but this origin, so injected markup cannot load an attacker's file. What it
-/// permits is the application's own runtime compiling the application's own
-/// expressions.
+/// `require-trusted-types-for 'script'` with `trusted-types pulsepoint` makes
+/// PulsePoint's policy the only code that may write markup; the same pair is
+/// what a web deployment of the application sends.
 ///
 /// The rest: `connect-src` covers `pp.rpc`, the streaming responses and the
 /// WebSocket — `ws:` because the socket is on the loopback origin, which is
@@ -268,14 +261,16 @@ impl Default for SecurityConfig {
 /// PulsePoint writes when a binding targets one.
 pub fn default_csp() -> String {
     "default-src 'self'; \
-     script-src 'self' 'unsafe-eval'; \
+     script-src 'self'; \
      style-src 'self' 'unsafe-inline'; \
      img-src 'self' data: blob:; \
      font-src 'self' data:; \
      connect-src 'self' ws: http://127.0.0.1:*; \
      frame-ancestors 'none'; \
      object-src 'none'; \
-     base-uri 'self'"
+     base-uri 'self'; \
+     require-trusted-types-for 'script'; \
+     trusted-types pulsepoint"
         .to_string()
 }
 
@@ -285,15 +280,17 @@ pub fn default_csp() -> String {
 /// `security.csp` is stored, so a project keeps whatever it was created with —
 /// right for a value somebody tuned, wrong for one nobody touched. Without this
 /// list a framework-level correction to the default could never reach an
-/// existing project, and the correction that prompted the list is not
-/// cosmetic: the entry below has no `'unsafe-eval'`, so every PulsePoint
-/// binding in a package built with it is dead.
+/// existing project.
 ///
 /// An entry is matched byte for byte. A policy that differs by so much as a
 /// space is one somebody edited, and is left exactly as it is.
 const SUPERSEDED_CSPS: &[&str] = &[
-    // Shipped before it was found that PulsePoint compiles its reactive
-    // expressions with `new Function`.
+    // Shipped while PulsePoint compiled bindings in the browser.
+    "default-src 'self'; script-src 'self' 'unsafe-eval'; \
+     style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; \
+     font-src 'self' data:; connect-src 'self' ws: http://127.0.0.1:*; \
+     frame-ancestors 'none'; object-src 'none'; base-uri 'self'",
+    // Shipped before Trusted Types.
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
      img-src 'self' data: blob:; font-src 'self' data:; \
      connect-src 'self' ws: http://127.0.0.1:*; frame-ancestors 'none'; \
@@ -449,10 +446,8 @@ impl NativeConfig {
             ));
         }
 
-        // A policy without `'unsafe-eval'` is one the application cannot run
-        // under, and the runtime symptom is bad: the server-rendered page
-        // appears, every binding on it is dead, and the only error is an
-        // `EvalError` from inside a minified bundle. Cheaper to say here.
+        // A script source wider than the application needs is an XSS with the
+        // native command bridge in reach. Nothing in a Rahti page needs either.
         let scripts = self
             .security
             .csp
@@ -460,18 +455,17 @@ impl NativeConfig {
             .map(str::trim)
             .find(|directive| directive.starts_with("script-src"));
         if let Some(scripts) = scripts
-            && !scripts.contains("'unsafe-eval'")
+            && let Some(source) = scripts
+                .split_whitespace()
+                .find(|source| matches!(*source, "'unsafe-eval'" | "'unsafe-inline'"))
         {
             return Err(fail(format!(
-                "`security.csp` has `{scripts}`, and PulsePoint cannot run under it.\n  \
-                 It compiles the expressions in a reactive block at runtime, with \
-                 `new Function` — which a Content-Security-Policy counts as evaluating a \
-                 string as JavaScript.\n  \
-                 Without `'unsafe-eval'` the page renders and every binding on it is \
-                 dead, reporting an EvalError from inside the runtime bundle.\n  \
-                 Add `'unsafe-eval'` to `script-src`. It stays narrow: `script-src` still \
-                 refuses every *source* but this origin, so injected markup cannot load \
-                 an attacker's file."
+                "`security.csp` has `{scripts}`, and `{source}` lets injected markup run \
+                 script — in a native shell, script that reaches the command bridge.\n  \
+                 A Rahti page needs neither: PulsePoint runs only the client code the \
+                 application compiled, from this origin.\n  \
+                 Remove `{source}` from `script-src`. A page that compiles WebAssembly \
+                 adds `'wasm-unsafe-eval'`, which allows that and nothing else."
             )));
         }
 
