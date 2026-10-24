@@ -622,6 +622,7 @@ fn stop(app: &tauri::AppHandle) {{
         if let Err(e) = server.shutdown(Duration::from_secs(5)).await {{
             eprintln!("rahti native: {{e}}");
         }}
+        {app_lib}::rahti::jobs::finish_shutdown().await;
     }});
 }}
 

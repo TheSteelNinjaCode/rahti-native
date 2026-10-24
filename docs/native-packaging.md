@@ -407,6 +407,13 @@ nothing is documented as depending on it.
 The bridge is a framework-owned script the shell injects before any page script
 runs. PulsePoint's bundle is not edited, patched or wrapped.
 
+## Build outputs
+
+A successful native build prints the executable and installer paths. Windows
+output discovery uses Cargo's resolved target directory, including
+`CARGO_TARGET_DIR` and `.cargo/config.toml` overrides. Android packages are
+reported from `native/gen/android/app/build/outputs`.
+
 ## Signing
 
 Nothing about signing is in any committed file, and `native/.gitignore` refuses
@@ -448,7 +455,9 @@ Android's lifecycle has nothing like it.
 On exit the shell fires Rahti's shutdown broadcast — which ends the dev event
 stream and every open socket, because a graceful shutdown would otherwise wait
 for connections that were never going to close — then stops accepting and waits
-a bounded five seconds for what is left. Dropping the server handle without a
+a bounded five seconds for what is left. The host then calls
+`rahti::jobs::finish_shutdown()` through the application re-export to stop
+schedulers and drain background queues. Dropping the server handle without a
 shutdown also stops it, which is the Android case: the operating system can
 destroy the process without giving anything a chance to run.
 

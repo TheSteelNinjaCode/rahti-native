@@ -38,6 +38,10 @@ async fn page() -> Html {
         <html lang="en">
             <body>
                 <h1>"Embedded"</h1>
+                <p>{message}</p>
+                <script>r##"
+                    const [message] = pp.state("embedded-ready");
+                "##</script>
                 <script type="module" src="/js/main.js"></script>
             </body>
         </html>
@@ -96,6 +100,7 @@ fn router(public: &std::path::Path) -> Router {
         .route("/", get(page))
         .route("/", post(rpcs))
         .merge(rahti::ws::routes())
+        .merge(rahti::client::routes())
         .fallback_service(tower_http::services::ServeDir::new(public))
         .layer(axum::middleware::from_fn(rahti::csrf));
 
@@ -126,6 +131,7 @@ struct Packaged {
 impl Packaged {
     async fn start() -> Self {
         let exclusive = ONE_AT_A_TIME.lock().await;
+        rahti_native::install_csp(&rahti_native::default_csp());
 
         // A packaged application serves assets staged out of its binary; this
         // stands in for that, so the static path is exercised as an absolute
@@ -384,6 +390,25 @@ async fn a_static_asset_is_served_from_an_absolute_packaged_path() {
     assert_eq!(response.status, 200, "the packaged asset path 404'd");
     assert!(response.body.contains("the runtime"), "{}", response.body);
 
+    app.server.shutdown(Duration::from_secs(5)).await.unwrap();
+}
+
+#[tokio::test]
+async fn the_compiled_client_registry_is_served_behind_the_launch_gate() {
+    let mut app = Packaged::start().await;
+    let denied = Request::get(rahti::client::PATH).send(app.addr).await;
+    assert_eq!(denied.status, 403);
+
+    let response = app.send(Request::get(rahti::client::PATH)).await;
+    assert_eq!(response.status, 200, "{}", response.body);
+    assert!(
+        response.body.contains("embedded-ready"),
+        "{}",
+        response.body
+    );
+    let csp = response.header("content-security-policy").unwrap();
+    assert!(!csp.contains("'unsafe-eval'"), "{csp}");
+    assert!(csp.contains("trusted-types pulsepoint"), "{csp}");
     app.server.shutdown(Duration::from_secs(5)).await.unwrap();
 }
 

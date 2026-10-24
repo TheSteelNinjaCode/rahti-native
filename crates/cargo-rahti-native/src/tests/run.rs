@@ -65,3 +65,27 @@ fn android_rebuilds_when_an_embedded_public_asset_changes() {
     assert!(watched.contains(&fixture.0.join("src")));
     assert!(watched.contains(&fixture.0.join("public")));
 }
+
+#[test]
+fn artifact_discovery_uses_cargos_configured_output_directory() {
+    let fixture = Fixture::new();
+    let native = fixture.0.join("native");
+    std::fs::create_dir_all(native.join("src")).unwrap();
+    std::fs::create_dir_all(native.join(".cargo")).unwrap();
+    std::fs::write(native.join("Cargo.toml"),
+        "[package]\nname = \"artifact-fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[workspace]\n").unwrap();
+    std::fs::write(native.join("src/main.rs"), "fn main() {}\n").unwrap();
+    let output = fixture.0.join("custom-output");
+    let configured = output.to_string_lossy().replace('\\', "/");
+    std::fs::write(
+        native.join(".cargo/config.toml"),
+        format!("[build]\ntarget-dir = \"{configured}\"\n"),
+    )
+    .unwrap();
+    assert_eq!(crate::run::target_directory(&native, None), output);
+    let overridden = fixture.0.join("env-output");
+    assert_eq!(
+        crate::run::target_directory(&native, Some(overridden.as_os_str())),
+        overridden
+    );
+}

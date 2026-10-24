@@ -433,6 +433,10 @@ fn shutdown_signals_the_applications_rahti_runtime_first() {
         framework < server,
         "the server stopped before the application's long-lived responses"
     );
+    let jobs = stop_body
+        .find("my_app::rahti::jobs::finish_shutdown().await")
+        .expect("the application's scheduler and job drain");
+    assert!(server < jobs, "jobs drained before HTTP shutdown");
 }
 
 #[test]

@@ -129,7 +129,7 @@ pub fn build(project: &Project, config: &NativeConfig, args: &Build) -> Result<(
     println!();
     execute(command, "build")?;
 
-    report_artifacts(project, config, args);
+    report_artifacts(project, args);
     Ok(())
 }
 
@@ -558,14 +558,34 @@ fn windows_environment(command: &mut Command) {
 
 // ------------------------------------------------------------ artifacts
 
+/// Resolve the build directory through Cargo, including local configuration.
+pub(crate) fn target_directory(native: &Path, override_dir: Option<&std::ffi::OsStr>) -> PathBuf {
+    let mut command = Command::new("cargo");
+    command.env_remove("CARGO_TARGET_DIR");
+    if let Some(directory) = override_dir {
+        command.env("CARGO_TARGET_DIR", directory);
+    }
+    command
+        .args(["metadata", "--format-version", "1", "--no-deps"])
+        .current_dir(native)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| serde_json::from_slice::<serde_json::Value>(&output.stdout).ok())
+        .and_then(|metadata| metadata["target_directory"].as_str().map(PathBuf::from))
+        .unwrap_or_else(|| native.join("target"))
+}
+
 /// Print the absolute path of everything the build produced.
 ///
 /// Found by walking the output directories rather than by predicting the
 /// filenames, because a bundler's naming is its own and a printed path that
 /// does not exist is worse than none.
-fn report_artifacts(project: &Project, config: &NativeConfig, args: &Build) {
+fn report_artifacts(project: &Project, args: &Build) {
     let native = project.native_dir();
     let profile = if args.debug { "debug" } else { "release" };
+    let override_dir = std::env::var_os("CARGO_TARGET_DIR");
+    let target_dir = target_directory(&native, override_dir.as_deref());
 
     let mut found: Vec<PathBuf> = Vec::new();
 
@@ -580,9 +600,9 @@ fn report_artifacts(project: &Project, config: &NativeConfig, args: &Build) {
             collect(&outputs, wanted, &mut found);
         }
         _ => {
-            let target = native.join("target").join(profile);
+            let target = target_dir.join(profile);
             // The executable, then whatever the bundlers wrote.
-            let exe = target.join(format!("{}.exe", config.product_name));
+            let exe = target.join(format!("{}-native.exe", project.package));
             if exe.is_file() {
                 found.push(exe);
             }
@@ -594,7 +614,7 @@ fn report_artifacts(project: &Project, config: &NativeConfig, args: &Build) {
     if found.is_empty() {
         println!("  The build reported success, but no package was found where one was");
         println!("  expected. Look under:");
-        println!("    {}", native.join("target").display());
+        println!("    {}", target_dir.display());
         return;
     }
 
