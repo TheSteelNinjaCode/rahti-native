@@ -102,7 +102,7 @@ runtime's integration tests. It is a dev-dependency, not something linked into
 a packaged application. The path is what makes those tests build today; the
 version is what makes the published dev-dependency resolvable.
 
-It requires `0.0.57`, matching the current publishing checkout. The path names
+It requires `0.0.58`, matching the current publishing checkout. The path names
 `../rahti`, not `../rahti-dev` where framework work happens: what these tests
 run against should be what actually ships. That release has to land before
 this package can. See `PUBLISHING.md`.

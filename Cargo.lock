@@ -135,7 +135,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cargo-rahti-native"
-version = "0.0.23"
+version = "0.0.24"
 dependencies = [
  "rahti-native",
  "serde_json",
@@ -1235,7 +1235,7 @@ checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
 name = "rahti"
-version = "0.0.57"
+version = "0.0.58"
 dependencies = [
  "axum",
  "base64",
@@ -1261,7 +1261,7 @@ dependencies = [
 
 [[package]]
 name = "rahti-js"
-version = "0.0.57"
+version = "0.0.58"
 dependencies = [
  "oxc_allocator",
  "oxc_ast",
@@ -1273,7 +1273,7 @@ dependencies = [
 
 [[package]]
 name = "rahti-macros"
-version = "0.0.57"
+version = "0.0.58"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1282,7 +1282,7 @@ dependencies = [
 
 [[package]]
 name = "rahti-native"
-version = "0.0.23"
+version = "0.0.24"
 dependencies = [
  "axum",
  "futures-util",
