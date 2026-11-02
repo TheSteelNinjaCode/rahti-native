@@ -42,9 +42,11 @@ pub fn dev(project: &Project, config: &NativeConfig, args: &Dev) -> Result<(), N
         command.arg(device);
     }
 
+    // In this order: the JDK has to suit the Gradle version the generated
+    // project pins, so that project has to exist first.
     if args.target == Platform::Android {
-        android_environment(&mut command)?;
         ensure_android_project(project, config)?;
+        android_environment(&mut command, project)?;
     }
 
     println!("  running {}", describe(&command));
@@ -108,7 +110,7 @@ pub fn build(project: &Project, config: &NativeConfig, args: &Build) -> Result<(
             if args.debug {
                 command.arg("--debug");
             }
-            android_environment(&mut command)?;
+            android_environment(&mut command, project)?;
             command
         }
         _ => {
@@ -191,7 +193,7 @@ fn ensure_android_project(project: &Project, config: &NativeConfig) -> Result<()
         println!("  generating the Android project (once per checkout)…");
         let mut command = doctor::cargo_tauri(&["android", "init"]);
         command.current_dir(project.native_dir());
-        android_environment(&mut command)?;
+        android_environment(&mut command, project)?;
         execute(command, "android init")?;
     }
 
@@ -506,8 +508,9 @@ pub(crate) fn allow_loopback_cleartext(generated: &Path) -> Result<(), NativeErr
 /// Set for the child process only. Changing the machine's environment is not
 /// this tool's to do, and a person who has deliberately pointed `ANDROID_HOME`
 /// somewhere keeps it — [`doctor::android_sdk`] reads the variable first and
-/// only falls back to the default location.
-fn android_environment(command: &mut Command) -> Result<(), NativeError> {
+/// only falls back to the default location. A `JAVA_HOME` that cannot run the
+/// build is the one exception, and the build says when it passes one over.
+fn android_environment(command: &mut Command, project: &Project) -> Result<(), NativeError> {
     let sdk = doctor::android_sdk().ok_or_else(|| {
         NativeError::new(
             "android",
@@ -525,9 +528,21 @@ fn android_environment(command: &mut Command) -> Result<(), NativeError> {
     command.env("ANDROID_SDK_ROOT", &sdk);
     command.env("NDK_HOME", &ndk);
 
-    if let Some(java) = doctor::java_home() {
-        command.env("JAVA_HOME", java);
+    let java = doctor::java(project);
+    let home = java.home.ok_or_else(|| {
+        NativeError::new(
+            "android",
+            format!(
+                "no JDK can run this build, which needs {} — run `cargo rahti native doctor`.",
+                java.wanted
+            ),
+        )
+    })?;
+    if let Some(problem) = java.problem {
+        println!("  java: {problem}");
+        println!("  java: using {} for this build", home.display());
     }
+    command.env("JAVA_HOME", home);
 
     // Signing is *not* passed through the environment to Tauri: it does not
     // read one on Android. `configure_signing` writes the key's details into

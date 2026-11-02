@@ -52,6 +52,12 @@ Android additionally needs the Android SDK, the NDK, a JDK and four Rust
 targets. `cargo rahti native doctor` names each missing one and the command
 that supplies it. It installs nothing itself.
 
+The JDK has to start and has to be one the generated project's Gradle can run:
+Java 17 to 24 on Gradle 8.14, which is what Tauri generates today. Android
+Studio's bundled `jbr` can be newer than that. A `JAVA_HOME` that fits is always
+used. One that does not is passed over, for the build's process only, in favour
+of a suitable JDK already on the machine, and the build prints which.
+
 ## The commands
 
 ```text

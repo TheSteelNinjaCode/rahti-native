@@ -20,7 +20,7 @@
 //! reports problems with something you are not building teaches people to
 //! ignore it.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use rahti_native::{NativeConfig, Platform};
@@ -84,7 +84,7 @@ pub fn examine(
     for target in targets {
         match target {
             Platform::Windows => findings.extend(windows(release)),
-            Platform::Android => findings.extend(android(config, release)),
+            Platform::Android => findings.extend(android(project, config, release)),
             Platform::Other => {}
         }
     }
@@ -274,7 +274,10 @@ fn webview2() -> Finding {
 
 // -------------------------------------------------------------- android
 
-fn android(config: &NativeConfig, release: bool) -> Vec<Finding> {
+/// The oldest JDK the Android Gradle Plugin runs on.
+const OLDEST_JAVA: u32 = 17;
+
+fn android(project: &Project, config: &NativeConfig, release: bool) -> Vec<Finding> {
     let mut findings = Vec::new();
 
     let sdk = android_sdk();
@@ -302,16 +305,7 @@ fn android(config: &NativeConfig, release: bool) -> Vec<Finding> {
         ),
     });
 
-    findings.push(match java_home() {
-        Some(dir) => Finding::ok("Java", dir.display().to_string()),
-        None => Finding::missing(
-            "Java",
-            "JAVA_HOME is not set to a JDK. Gradle runs on it, and Gradle is what assembles\n   \
-             an APK or an AAB.\n   \
-             Android Studio ships one: set JAVA_HOME to its `jbr` directory, or install a\n   \
-             JDK 17 or later.",
-        ),
-    });
+    findings.push(java_finding(project));
 
     // Four, because an APK on Google Play covers four ABIs. A device build
     // needs only its own, but a release AAB needs all of them.
@@ -470,20 +464,211 @@ pub fn android_ndk(sdk: Option<&std::path::Path>) -> Option<PathBuf> {
     found.pop()
 }
 
-/// A `JAVA_HOME` that is actually a JDK.
+/// The JDK a build runs on, and what is wrong with `JAVA_HOME` if it is not
+/// that one.
+pub struct Java {
+    pub home: Option<PathBuf>,
+    pub problem: Option<String>,
+    /// Which versions this project can use, in words.
+    pub wanted: String,
+}
+
+/// `JAVA_HOME` if it can run this project's Gradle, or else a JDK already on
+/// this machine that can.
 ///
-/// The directory existing is not enough: an Android Studio installation that
-/// was moved or partly removed leaves a `jbr` with no runtime in it, and
-/// `JAVA_HOME` pointing at one produces a Gradle failure that names a missing
-/// `jvm.cfg`.
-pub fn java_home() -> Option<PathBuf> {
-    let home = existing_dir_from_env("JAVA_HOME")?;
-    let launcher = if cfg!(windows) {
-        home.join("bin/java.exe")
-    } else {
-        home.join("bin/java")
+/// A working `JAVA_HOME` is never overridden, whatever else is installed. One
+/// that cannot run the build is no choice worth keeping, and is only passed
+/// over for the build's own process; the variable itself stays as it is.
+pub fn java(project: &Project) -> Java {
+    let newest = newest_java(project);
+    let wanted = match newest {
+        Some(newest) => format!("a JDK from {OLDEST_JAVA} to {newest}"),
+        None => format!("a JDK {OLDEST_JAVA} or later"),
     };
-    launcher.is_file().then_some(home)
+
+    let configured = std::env::var("JAVA_HOME")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    let problem = configured.as_deref().and_then(|home| {
+        java_problem(home, newest)
+            .map(|problem| format!("JAVA_HOME ({}) {problem}", home.display()))
+    });
+
+    let home = match (&configured, &problem) {
+        (Some(home), None) => Some(home.clone()),
+        _ => installed_jdks()
+            .into_iter()
+            .find(|home| java_problem(home, newest).is_none()),
+    };
+
+    Java {
+        home,
+        problem,
+        wanted,
+    }
+}
+
+fn java_finding(project: &Project) -> Finding {
+    let Java {
+        home,
+        problem,
+        wanted,
+    } = java(project);
+
+    match (home, problem) {
+        (Some(home), None) => Finding::ok("Java", home.display().to_string()),
+        (Some(home), Some(problem)) => Finding::warning(
+            "Java",
+            format!(
+                "{problem}\n   \
+                 Builds use {} instead, for the build only.\n   \
+                 Fix: point JAVA_HOME at {wanted} to choose one yourself.",
+                home.display()
+            ),
+        ),
+        (None, problem) => Finding::missing(
+            "Java",
+            format!(
+                "{}\n   \
+                 Gradle runs on a JDK, and Gradle is what assembles an APK or an AAB.\n   \
+                 Fix: install {wanted}, and set JAVA_HOME to it. The one Android Studio ships\n   \
+                 in its `jbr` directory works when its version is in that range.",
+                problem.unwrap_or_else(|| "No JDK was found.".to_string())
+            ),
+        ),
+    }
+}
+
+/// What stops the JDK at `home` running the build, or `None` if nothing does.
+///
+/// Tested by starting it, because the launcher existing is not enough: an
+/// Android Studio installation that was moved or partly removed leaves a `jbr`
+/// with `java.exe` and no runtime, and Gradle then fails naming a missing
+/// `jvm.cfg`.
+fn java_problem(home: &Path, newest: Option<u32>) -> Option<String> {
+    let Some(output) = run(Command::new(java_launcher(home)).arg("-version")) else {
+        return Some("does not start, so it is not a complete JDK.".to_string());
+    };
+
+    // An unfamiliar version line says nothing against a JDK that started.
+    let major = java_major(&output)?;
+    if major < OLDEST_JAVA {
+        return Some(format!(
+            "is Java {major}, and the Android Gradle Plugin needs {OLDEST_JAVA} or later."
+        ));
+    }
+    match newest {
+        Some(newest) if major > newest => Some(format!(
+            "is Java {major}, and this project's Gradle runs on Java {newest} at most."
+        )),
+        _ => None,
+    }
+}
+
+fn java_launcher(home: &Path) -> PathBuf {
+    home.join(if cfg!(windows) {
+        "bin/java.exe"
+    } else {
+        "bin/java"
+    })
+}
+
+/// The major version in `java -version` output: `25` from `"25.0.4"`, and `8`
+/// from the older `"1.8.0_292"`.
+fn java_major(output: &str) -> Option<u32> {
+    let version = output.split_once("version \"")?.1;
+    let mut parts = version.split(|c: char| !c.is_ascii_digit());
+    match parts.next()?.parse().ok()? {
+        1 => parts.next()?.parse().ok(),
+        major => Some(major),
+    }
+}
+
+/// The newest Java the generated project's Gradle can run on, or `None` when
+/// that is not known yet: `gen/android` does not exist before the first build.
+fn newest_java(project: &Project) -> Option<u32> {
+    let wrapper = project
+        .native_dir()
+        .join("gen/android/gradle/wrapper/gradle-wrapper.properties");
+    newest_java_on_gradle(gradle_version(&std::fs::read_to_string(wrapper).ok()?)?)
+}
+
+/// `(major, minor)` from a `gradle-wrapper.properties`.
+fn gradle_version(properties: &str) -> Option<(u32, u32)> {
+    let url = properties
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("distributionUrl="))?;
+    let mut parts = url.rsplit_once("gradle-")?.1.split(['.', '-']);
+    Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
+}
+
+/// Gradle's compatibility matrix. Past the ceiling Gradle does not refuse
+/// cleanly: 8.14 on Java 25 fails configuring `buildSrc` with the message
+/// `> 25.0.4` and nothing else.
+fn newest_java_on_gradle(gradle: (u32, u32)) -> Option<u32> {
+    match gradle {
+        (8, 14..) | (9, 0) => Some(24),
+        (8, 10..) => Some(23),
+        (8, 8..) => Some(22),
+        (8, 5..) => Some(21),
+        (8, _) => Some(20),
+        _ => None,
+    }
+}
+
+/// JDKs in the places they are installed, Android Studio's first.
+///
+/// Only ever looked at. Gradle's own `jdks` directory is included because a
+/// toolchain it fetched earlier is an ordinary complete JDK.
+fn installed_jdks() -> Vec<PathBuf> {
+    let mut parents = Vec::new();
+
+    if cfg!(windows) {
+        if let Some(programs) = std::env::var_os("ProgramFiles").map(PathBuf::from) {
+            for vendor in ["Android", "Java", "Eclipse Adoptium", "Microsoft", "Zulu"] {
+                parents.push(programs.join(vendor));
+            }
+        }
+    } else {
+        for parent in [
+            "/Applications",
+            "/opt",
+            "/Library/Java/JavaVirtualMachines",
+            "/usr/lib/jvm",
+        ] {
+            parents.push(PathBuf::from(parent));
+        }
+    }
+
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" });
+    if let Some(home) = home.map(PathBuf::from) {
+        parents.push(home.join(".gradle/jdks"));
+        parents.push(home.join(".jdks"));
+    }
+
+    let mut found = Vec::new();
+    for parent in parents {
+        let Ok(entries) = std::fs::read_dir(parent) else {
+            continue;
+        };
+        let mut entries: Vec<PathBuf> = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .collect();
+        entries.sort();
+
+        for entry in entries {
+            let layouts = ["jbr", "Contents/jbr", "Contents/Home"].map(|path| entry.join(path));
+            found.extend(
+                std::iter::once(entry.clone())
+                    .chain(layouts)
+                    .filter(|home| java_launcher(home).is_file()),
+            );
+        }
+    }
+    found
 }
 
 fn adb() -> PathBuf {
