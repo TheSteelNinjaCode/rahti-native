@@ -110,6 +110,11 @@ impl Project {
     /// a key: `AUTH_SECRET` is deliberately not read here and has no field to
     /// go in.
     pub fn cookie_name(&self) -> Option<String> {
+        self.env_value("AUTH_COOKIE_NAME")
+    }
+
+    /// One value from the project's `.env`, if it is there.
+    pub fn env_value(&self, wanted: &str) -> Option<String> {
         let env = std::fs::read_to_string(self.root.join(".env")).ok()?;
         for line in env.lines() {
             let line = line.trim();
@@ -119,7 +124,7 @@ impl Project {
             let Some((name, value)) = line.split_once('=') else {
                 continue;
             };
-            if name.trim() != "AUTH_COOKIE_NAME" {
+            if name.trim() != wanted {
                 continue;
             }
             let value = value.trim().trim_matches('"').trim_matches('\'').trim();

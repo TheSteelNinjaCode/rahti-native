@@ -234,3 +234,81 @@ fn builds_answers_for_the_targets_that_were_asked_for() {
     assert!(config.builds("windows"));
     assert!(!config.builds("android"));
 }
+
+fn remote() -> NativeConfig {
+    let mut config = valid();
+    config.database.mode = DatabaseMode::Remote;
+    config
+}
+
+#[test]
+fn a_remote_database_implies_its_url_in_a_development_build() {
+    let mut config = remote();
+    assert_eq!(config.development_env(), ["DATABASE_URL"]);
+
+    // Listing it as well does not embed it twice.
+    config.development.env = vec!["DATABASE_URL".into(), "STORAGE_API_KEY".into()];
+    assert_eq!(
+        config.development_env(),
+        ["DATABASE_URL", "STORAGE_API_KEY"]
+    );
+    assert!(config.validate().is_ok());
+}
+
+#[test]
+fn a_local_database_takes_nothing_from_env_unless_asked() {
+    assert!(valid().development_env().is_empty());
+}
+
+#[test]
+fn a_project_without_development_settings_has_a_file_without_the_field() {
+    // Existing files stay byte-identical until a project opts in.
+    assert!(!valid().to_json().contains("development"));
+}
+
+#[test]
+fn development_settings_survive_a_round_trip() {
+    let mut original = remote();
+    original.development.env = vec!["APP_TIMEZONE".into()];
+    let parsed = NativeConfig::parse(&original.to_json()).expect("the file it just wrote");
+    assert_eq!(original, parsed);
+}
+
+#[test]
+fn a_session_key_cannot_be_carried_onto_a_device() {
+    let mut config = remote();
+    config.development.env = vec!["AUTH_SECRET".into()];
+    let error = config.validate().expect_err("the key is per installation");
+    assert!(error.to_string().contains("AUTH_SECRET"), "{error}");
+}
+
+#[test]
+fn a_variable_the_shell_sets_cannot_be_listed() {
+    for name in [
+        "RAHTI_DEV",
+        "RAHTI_PUBLIC_DIR",
+        "RAHTI_SPILL_DIR",
+        "AUTH_COOKIE_NAME",
+    ] {
+        let mut config = remote();
+        config.development.env = vec![name.into()];
+        assert!(config.validate().is_err(), "{name}");
+    }
+}
+
+#[test]
+fn development_env_holds_names_not_values() {
+    for entry in ["DATABASE_URL=postgres://x", "1ABC", "", "A B"] {
+        let mut config = remote();
+        config.development.env = vec![entry.into()];
+        assert!(config.validate().is_err(), "{entry}");
+    }
+}
+
+#[test]
+fn a_local_database_cannot_also_name_a_url() {
+    let mut config = valid();
+    config.development.env = vec!["DATABASE_URL".into()];
+    let error = config.validate().expect_err("the shell sets it");
+    assert!(error.to_string().contains("sqlite-local"), "{error}");
+}

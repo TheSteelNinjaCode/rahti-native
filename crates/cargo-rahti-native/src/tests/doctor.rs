@@ -59,3 +59,20 @@ fn gradle_8_14_stops_at_java_24_and_9_1_has_no_known_ceiling() {
     assert_eq!(super::newest_java_on_gradle((8, 5)), Some(21));
     assert_eq!(super::newest_java_on_gradle((9, 1)), None);
 }
+
+#[test]
+fn a_remote_release_is_told_it_has_no_database() {
+    let mut config =
+        rahti_native::NativeConfig::new("My App", "com.example.myapp", "0.1.0", &["android"]);
+    assert!(crate::doctor::release_database(&config, true).is_none());
+
+    config.database.mode = rahti_native::DatabaseMode::Remote;
+    assert!(crate::doctor::release_database(&config, false).is_none());
+
+    let finding = crate::doctor::release_database(&config, true).expect("a warning");
+    assert!(
+        finding.advice.contains("DATABASE_URL"),
+        "{}",
+        finding.advice
+    );
+}

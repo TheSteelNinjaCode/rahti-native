@@ -553,3 +553,80 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, String)>) {
         }
     }
 }
+
+// ---------------------------------------------------- development settings
+
+fn generated_build_script(mode: rahti_native::DatabaseMode, env: &[&str]) -> String {
+    let fixture = Fixture::new();
+    let mut config = NativeConfig::new(
+        "My App",
+        "com.example.myapp",
+        "0.1.0",
+        &["windows", "android"],
+    );
+    config.database.mode = mode;
+    config.development.env = env.iter().map(|name| name.to_string()).collect();
+    crate::shell::files(&fixture.project(), &config)
+        .into_iter()
+        .find(|file| file.path == "native/build.rs")
+        .expect("a build script")
+        .contents
+}
+
+#[test]
+fn a_remote_database_reaches_a_development_build() {
+    // The failure this exists for: a package that opens, connects to nothing,
+    // and shows an empty catalog.
+    let script = generated_build_script(rahti_native::DatabaseMode::Remote, &["STORAGE_API_KEY"]);
+    assert!(
+        script.contains(r#"&["DATABASE_URL", "STORAGE_API_KEY"]"#),
+        "{script}"
+    );
+}
+
+#[test]
+fn a_local_database_build_script_selects_nothing() {
+    let script = generated_build_script(rahti_native::DatabaseMode::SqliteLocal, &[]);
+    assert!(
+        script.contains("const DEVELOPMENT_ENV: &[&str] = &[];"),
+        "{script}"
+    );
+}
+
+#[test]
+fn only_the_debug_profile_reads_the_projects_env() {
+    // A credential in a release package is readable by everyone who has it.
+    let script = generated_build_script(rahti_native::DatabaseMode::Remote, &[]);
+    let gate = script
+        .find(r#"std::env::var("PROFILE").as_deref() == Ok("debug")"#)
+        .expect("a profile gate");
+    let read = script
+        .find("read_to_string(project_env)")
+        .expect("a read of .env");
+    assert!(gate < read, "the file is read outside the gate");
+    assert_eq!(script.matches("read_to_string(project_env)").count(), 1);
+    assert!(
+        !script.contains("cargo:rustc-env=DATABASE"),
+        "a value reached the compiler's environment"
+    );
+}
+
+#[test]
+fn the_shell_applies_its_settings_before_the_application_starts() {
+    let fixture = Fixture::new();
+    crate::init::run(&fixture.project(), &first_run()).expect("a first run");
+    let lib = fixture.read("native/src/lib.rs");
+
+    let apply = lib
+        .find("rahti_native::apply_development_env")
+        .expect("the settings applied");
+    let start = lib.find("initialize_application()").expect("a start");
+    assert!(
+        apply < start,
+        "the application connected before they were set"
+    );
+    assert!(
+        lib[..apply].ends_with("#[cfg(debug_assertions)]\n    "),
+        "a release must not reference the file"
+    );
+}

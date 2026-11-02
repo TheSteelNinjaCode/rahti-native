@@ -89,3 +89,17 @@ fn artifact_discovery_uses_cargos_configured_output_directory() {
         overridden
     );
 }
+
+#[test]
+fn only_a_device_that_can_take_a_command_is_forwarded_to() {
+    let output = "List of devices attached\n\
+                  emulator-5554\tdevice\n\
+                  R58M123\tdevice product:x model:y\n\
+                  ZX1G22\tunauthorized\n\
+                  0123\toffline\n\n";
+    assert_eq!(
+        crate::run::attached_devices(output),
+        ["emulator-5554", "R58M123"]
+    );
+    assert!(crate::run::attached_devices("List of devices attached\n\n").is_empty());
+}

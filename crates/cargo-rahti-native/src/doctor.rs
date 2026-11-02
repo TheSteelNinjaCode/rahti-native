@@ -23,7 +23,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use rahti_native::{NativeConfig, Platform};
+use rahti_native::{DatabaseMode, NativeConfig, Platform};
 
 use crate::project::Project;
 
@@ -80,6 +80,7 @@ pub fn examine(
     release: bool,
 ) -> Vec<Finding> {
     let mut findings = vec![shared_startup(project), native_shell(project), tauri_cli()];
+    findings.extend(release_database(config, release));
 
     for target in targets {
         match target {
@@ -97,6 +98,25 @@ pub fn blocked(findings: &[Finding]) -> bool {
 }
 
 // --------------------------------------------------------------- shared
+
+/// A release with a remote database starts with nothing to connect to.
+///
+/// A warning rather than a refusal because an application may deliberately
+/// run without one, and it is said here because nothing else does: the
+/// package builds, installs and opens, and its pages are simply empty.
+pub(crate) fn release_database(config: &NativeConfig, release: bool) -> Option<Finding> {
+    (release && config.database.mode == DatabaseMode::Remote).then(|| {
+        Finding::warning(
+            "release database",
+            "`database.mode` is `remote`, and a release package has no DATABASE_URL.\n   \
+             Development builds take it from `.env`. A release must not: anything in a\n   \
+             package can be read back out of it, and a database password in a public\n   \
+             installer is full access for everyone who downloads it.\n   \
+             Host the backend on a public address, or set `database.mode` to `sqlite-local`\n   \
+             for data that belongs on the device.",
+        )
+    })
+}
 
 fn shared_startup(project: &Project) -> Finding {
     if project.has_shared_startup() {
@@ -671,7 +691,7 @@ fn installed_jdks() -> Vec<PathBuf> {
     found
 }
 
-fn adb() -> PathBuf {
+pub(crate) fn adb() -> PathBuf {
     android_sdk()
         .map(|sdk| {
             sdk.join(if cfg!(windows) {

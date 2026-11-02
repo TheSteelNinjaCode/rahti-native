@@ -88,6 +88,9 @@ pub struct NativeConfig {
     #[serde(default)]
     pub auth: AuthConfig,
 
+    #[serde(default, skip_serializing_if = "DevelopmentConfig::is_empty")]
+    pub development: DevelopmentConfig,
+
     /// Depend on a Rahti checkout by path rather than by version.
     ///
     /// For working on the framework itself, and the same idea as
@@ -201,6 +204,43 @@ impl Default for DatabaseConfig {
         }
     }
 }
+
+/// What a development build takes from the project's `.env`.
+///
+/// **Names, never values.** The values stay in `.env` and reach a debug build
+/// through its `OUT_DIR`; a release build carries none of them.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevelopmentConfig {
+    /// `DATABASE_URL` is implied by `database.mode: remote`.
+    #[serde(default)]
+    pub env: Vec<String>,
+}
+
+impl DevelopmentConfig {
+    fn is_empty(&self) -> bool {
+        self.env.is_empty()
+    }
+}
+
+/// What `development.env` cannot name, and why.
+const RESERVED_ENV: [(&str, &str); 5] = [
+    (
+        "AUTH_SECRET",
+        "the session key is generated on the device, and a shared one would let every \
+         installation forge every other's sessions",
+    ),
+    (
+        "AUTH_COOKIE_NAME",
+        "the shell already has it, from `auth.cookieName`",
+    ),
+    ("RAHTI_DEV", "the shell states it"),
+    ("RAHTI_PUBLIC_DIR", "the shell sets it to the staged assets"),
+    (
+        "RAHTI_SPILL_DIR",
+        "the shell sets it to the cache directory",
+    ),
+];
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -327,6 +367,7 @@ impl NativeConfig {
             bundle: BundleConfig::default(),
             database: DatabaseConfig::default(),
             auth: AuthConfig::default(),
+            development: DevelopmentConfig::default(),
             local: None,
             security: SecurityConfig::default(),
             scaffold: BTreeMap::new(),
@@ -437,6 +478,10 @@ impl NativeConfig {
             check_cookie_name(cookie).map_err(fail)?;
         }
 
+        for name in &self.development.env {
+            self.check_development_env(name).map_err(fail)?;
+        }
+
         if self.security.csp.trim().is_empty() {
             return Err(fail(
                 "`security.csp` is empty. A package that serves no Content-Security-Policy \
@@ -470,6 +515,48 @@ impl NativeConfig {
         }
 
         Ok(())
+    }
+
+    fn check_development_env(&self, name: &str) -> Result<(), String> {
+        let legal = name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !legal {
+            return Err(format!(
+                "`development.env` lists `{name}`, which is not a variable name. It holds \
+                 names from `.env`, never values."
+            ));
+        }
+        if let Some((_, why)) = RESERVED_ENV.iter().find(|(reserved, _)| *reserved == name) {
+            return Err(format!("`development.env` cannot list `{name}`: {why}."));
+        }
+        if name == "DATABASE_URL" && self.database.mode == DatabaseMode::SqliteLocal {
+            return Err(
+                "`development.env` lists `DATABASE_URL`, and `database.mode` is `sqlite-local`, \
+                 where the shell sets it to the local file.\n  \
+                 A project on PostgreSQL or MySQL sets `database.mode` to `remote`, which \
+                 implies it."
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Every name a development build takes from `.env`.
+    ///
+    /// `DATABASE_URL` first when the database is remote: nothing else gives a
+    /// packaged application one, and without it the catalog of a working
+    /// application is silently empty.
+    pub fn development_env(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        if self.database.mode == DatabaseMode::Remote {
+            names.push("DATABASE_URL".to_string());
+        }
+        for name in &self.development.env {
+            if !names.contains(name) {
+                names.push(name.clone());
+            }
+        }
+        names
     }
 
     /// Whether `target` is one this project asked for.

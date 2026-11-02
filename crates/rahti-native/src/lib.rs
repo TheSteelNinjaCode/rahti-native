@@ -65,6 +65,7 @@
 mod bridge;
 mod capabilities;
 mod config;
+mod development;
 mod error;
 mod gate;
 mod headers;
@@ -82,10 +83,11 @@ mod tests;
 pub use bridge::{BRIDGE_PATH, bridge_route, bridge_script};
 pub use capabilities::{Capability, NativeCommand, commands, is_allowed, is_external_url};
 pub use config::{
-    AndroidConfig, AuthConfig, BundleConfig, DatabaseConfig, DatabaseMode, MIN_ANDROID_SDK,
-    NativeConfig, SCHEMA_VERSION, SecurityConfig, TARGETS, WindowConfig, check_identifier,
-    check_product_name, check_version, default_csp, superseded_csp,
+    AndroidConfig, AuthConfig, BundleConfig, DatabaseConfig, DatabaseMode, DevelopmentConfig,
+    MIN_ANDROID_SDK, NativeConfig, SCHEMA_VERSION, SecurityConfig, TARGETS, WindowConfig,
+    check_identifier, check_product_name, check_version, default_csp, superseded_csp,
 };
+pub use development::{apply_development_env, loopback_database_port};
 pub use error::NativeError;
 pub use gate::{LAUNCH_PARAM, LaunchToken, gate, launch_token};
 pub use headers::{csp, install_csp, secure, security_headers};

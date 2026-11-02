@@ -92,7 +92,19 @@ pub fn json() -> String {
       "properties": {{
         "mode": {{
           "enum": ["sqlite-local", "remote"],
-          "description": "`sqlite-local` creates a SQLite file in application storage on first launch. `remote` leaves DATABASE_URL exactly as it is, which is what a project on PostgreSQL or MySQL needs — its database is somewhere else, and rewriting the connection string would start the application against an empty one that looked like a working one."
+          "description": "`sqlite-local` creates a SQLite file in application storage on first launch. `remote` is what a project on PostgreSQL or MySQL needs: its database is somewhere else, and rewriting the connection string would start the application against an empty one that looked like a working one. A development build takes DATABASE_URL from `.env`; a release has none, so a release's backend has to be hosted."
+        }}
+      }}
+    }},
+    "development": {{
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {{
+        "env": {{
+          "type": "array",
+          "uniqueItems": true,
+          "items": {{ "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }},
+          "description": "Names of `.env` variables a debug build carries onto the device, because a packaged application reads no `.env`. Names, never values, and never in a release build. `DATABASE_URL` is implied by `database.mode: remote`."
         }}
       }}
     }},

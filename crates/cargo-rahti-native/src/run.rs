@@ -22,7 +22,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use rahti_native::{NativeConfig, NativeError, Platform};
+use rahti_native::{DatabaseMode, NativeConfig, NativeError, Platform};
 
 use crate::args::{AndroidFormat, Build, Dev};
 use crate::doctor;
@@ -47,11 +47,59 @@ pub fn dev(project: &Project, config: &NativeConfig, args: &Dev) -> Result<(), N
     if args.target == Platform::Android {
         ensure_android_project(project, config)?;
         android_environment(&mut command, project)?;
+        forward_database_port(project, config);
     }
 
     println!("  running {}", describe(&command));
     println!();
     execute(command, "dev")
+}
+
+/// Make a database on this machine reachable from every attached device.
+///
+/// `localhost` on a device is the device. `adb reverse` is the one route that
+/// works on an emulator and on a phone alike. Best effort, because no device
+/// may be attached yet, and an emulator has its own alias for this machine to
+/// fall back on.
+fn forward_database_port(project: &Project, config: &NativeConfig) {
+    if config.database.mode != DatabaseMode::Remote {
+        return;
+    }
+    let url = project.env_value("DATABASE_URL").unwrap_or_default();
+    let Some(port) = rahti_native::loopback_database_port(&url) else {
+        return;
+    };
+    let Ok(devices) = Command::new(doctor::adb()).arg("devices").output() else {
+        return;
+    };
+
+    let forward = format!("tcp:{port}");
+    for serial in attached_devices(&String::from_utf8_lossy(&devices.stdout)) {
+        let forwarded = Command::new(doctor::adb())
+            .args(["-s", serial, "reverse", &forward, &forward])
+            .output()
+            .is_ok_and(|output| output.status.success());
+        if forwarded {
+            println!("  database: forwarded port {port} to {serial}");
+        } else {
+            println!("  database: could not forward port {port} to {serial}");
+        }
+    }
+}
+
+/// The serials in `adb devices` output that are ready to take a command.
+///
+/// `offline` and `unauthorized` devices are listed too, and refuse one.
+pub(crate) fn attached_devices(output: &str) -> Vec<&str> {
+    output
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let mut columns = line.split_whitespace();
+            let serial = columns.next()?;
+            (columns.next() == Some("device")).then_some(serial)
+        })
+        .collect()
 }
 
 /// Teach Tauri about the application outside the shell's own workspace.

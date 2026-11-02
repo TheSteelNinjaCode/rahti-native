@@ -269,11 +269,44 @@ rather than reviewed.
 application storage, reached through an absolute `DATABASE_URL` created on
 first launch.
 
-A project on PostgreSQL or MySQL sets `remote`, and its `DATABASE_URL` is left
-exactly as it is. Rewriting it to a local SQLite file would start the
-application against an empty database that looked like a working one. A
-packaged application is a client of a remote database, and that is the whole
-of what native packaging does about it.
+A project on PostgreSQL or MySQL sets `remote`, and its `DATABASE_URL` is never
+rewritten to a local SQLite file: that would start the application against an
+empty database that looked like a working one.
+
+A packaged application reads no `.env`, though, so where a `remote`
+`DATABASE_URL` comes from depends on the build.
+
+**A development build** takes it from the project's `.env`, along with any
+other name in `development.env`:
+
+```json
+"database": { "mode": "remote" },
+"development": { "env": ["STORAGE_API_KEY", "APP_TIMEZONE"] }
+```
+
+The list holds names, never values. The generated `build.rs` copies those lines
+into `OUT_DIR` for the debug profile, and `apply_development_env` puts them in
+the environment before `initialize_application` runs. `AUTH_SECRET` and the
+variables the shell sets itself are refused. Editing the list and re-running
+`init` is how the shell learns it, and an edited `build.rs` needs `--force`.
+
+On Android, `localhost` is the device. `cargo rahti native dev` runs
+`adb reverse` for a database on this machine, on every attached device. A debug
+package installed some other way uses a forwarded port if it finds one, and
+otherwise reaches an emulator's host at `10.0.2.2`. A phone needs the port
+forwarded by hand:
+
+```text
+adb reverse tcp:5432 tcp:5432
+```
+
+Those values are in the debug package, so do not hand one to anybody.
+
+**A release build** carries none of them, and must not: anything in a package
+can be read back out of it, and a database password in a public installer is
+full access for everyone who downloads it. So a `remote` release starts with no
+database at all, and `doctor --release` says so. Its backend has to be hosted on
+a public address.
 
 ## The session key
 
