@@ -217,3 +217,74 @@ fn help_and_version_are_reachable_from_everywhere() {
     assert!(matches!(parsed("--version"), Command::Version));
     assert!(matches!(parsed("-V"), Command::Version));
 }
+
+// ---------------------------------------------------------- agent surface
+
+#[test]
+fn a_build_can_name_one_abi_in_androids_words_or_taurus() {
+    for line in [
+        "build --target android --abi x86_64",
+        "build --target android --abi X86_64",
+    ] {
+        let Command::Build(build) = parsed(line) else {
+            panic!("`{line}` is not a build");
+        };
+        assert_eq!(build.abi, Some(AndroidAbi::X86_64));
+    }
+    assert_eq!(AndroidAbi::parse("arm64-v8a\r\n"), Some(AndroidAbi::Arm64));
+    assert_eq!(AndroidAbi::parse("aarch64"), Some(AndroidAbi::Arm64));
+    assert_eq!(AndroidAbi::parse("armeabi-v7a"), Some(AndroidAbi::Arm));
+    assert_eq!(AndroidAbi::parse("i686"), Some(AndroidAbi::X86));
+    assert!(refused("build --target android --abi mips").contains("arm64-v8a"));
+}
+
+#[test]
+fn a_build_can_name_a_device() {
+    let Command::Build(build) = parsed("build --target android --debug --device emulator-5554")
+    else {
+        panic!("not a build");
+    };
+    assert_eq!(build.device.as_deref(), Some("emulator-5554"));
+}
+
+#[test]
+fn what_only_android_has_is_refused_on_windows() {
+    assert!(refused("build --target windows --abi x86_64").contains("--target android"));
+    assert!(refused("build --target windows --device emulator-5554").contains("--target android"));
+}
+
+#[test]
+fn an_aab_cannot_be_installed_on_a_device() {
+    let message = refused("build --target android --format aab --device emulator-5554");
+    assert!(message.contains("does not install"), "{message}");
+}
+
+#[test]
+fn doctor_can_answer_in_json() {
+    let Command::Doctor(doctor) = parsed("doctor --json") else {
+        panic!("not doctor");
+    };
+    assert!(doctor.json);
+}
+
+#[test]
+fn icon_takes_one_image_and_an_optional_background() {
+    assert_eq!(
+        parsed("icon public/logo.svg --background #0a2540"),
+        Command::Icon(Icon {
+            source: "public/logo.svg".to_string(),
+            background: Some("#0a2540".to_string()),
+        })
+    );
+    assert_eq!(
+        parsed("icon logo.png"),
+        Command::Icon(Icon {
+            source: "logo.png".to_string(),
+            background: None,
+        })
+    );
+    assert!(refused("icon").contains("square PNG or SVG"));
+    assert!(refused("icon a.svg b.svg").contains("second"));
+    assert!(refused("icon a.svg --background red").contains("#rrggbb"));
+    assert!(refused("icon a.svg --force").contains("not an option"));
+}

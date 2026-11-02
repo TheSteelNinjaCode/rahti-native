@@ -103,3 +103,93 @@ fn only_a_device_that_can_take_a_command_is_forwarded_to() {
     );
     assert!(crate::run::attached_devices("List of devices attached\n\n").is_empty());
 }
+
+// --------------------------------------------------------------- artifacts
+
+#[test]
+fn an_android_build_looks_only_where_it_wrote() {
+    use crate::args::{AndroidAbi, AndroidFormat};
+    use crate::run::android_output_dirs;
+
+    let outputs = std::path::Path::new("outputs");
+
+    // The real bug: a universal build listed an older x86_64 APK beside its own.
+    assert_eq!(
+        android_output_dirs(outputs, None, Some(AndroidFormat::Apk), true),
+        [(outputs.join("apk/universal/debug"), "apk")]
+    );
+    assert_eq!(
+        android_output_dirs(
+            outputs,
+            Some(AndroidAbi::X86_64),
+            Some(AndroidFormat::Apk),
+            true
+        ),
+        [(outputs.join("apk/x86_64/debug"), "apk")]
+    );
+    assert_eq!(
+        android_output_dirs(
+            outputs,
+            Some(AndroidAbi::Arm64),
+            Some(AndroidFormat::Aab),
+            false
+        ),
+        [(outputs.join("bundle/arm64Release"), "aab")]
+    );
+    assert_eq!(
+        android_output_dirs(outputs, None, None, false),
+        [
+            (outputs.join("apk/universal/release"), "apk"),
+            (outputs.join("bundle/universalRelease"), "aab"),
+        ]
+    );
+}
+
+#[test]
+fn an_installer_from_before_this_build_is_not_this_builds() {
+    use std::time::{Duration, SystemTime};
+
+    let fixture = Fixture::new();
+    let installer = fixture.0.join("app_0.1.0_x64.msi");
+    std::fs::write(&installer, "").unwrap();
+
+    let before = SystemTime::now() - Duration::from_secs(60);
+    let after = SystemTime::now() + Duration::from_secs(60);
+
+    assert!(crate::run::written_since(&installer, before));
+    assert!(!crate::run::written_since(&installer, after));
+    assert!(!crate::run::written_since(
+        &fixture.0.join("absent"),
+        before
+    ));
+}
+
+#[test]
+fn the_build_report_says_what_an_agent_would_otherwise_scrape() {
+    use crate::args::{AndroidAbi, Build};
+
+    let args = Build {
+        target: Platform::Android,
+        format: None,
+        debug: true,
+        abi: None,
+        device: Some("emulator-5554".to_string()),
+    };
+    let warning = crate::doctor::Finding::warning("debug package", "Do not\n   pass it on.");
+    let report = crate::run::build_report(
+        &args,
+        Some(AndroidAbi::X86_64),
+        &[PathBuf::from("app-x86_64-debug.apk")],
+        &[warning],
+        true,
+    );
+
+    assert_eq!(report["target"], "android");
+    assert_eq!(report["profile"], "debug");
+    assert_eq!(report["abi"], "x86_64");
+    assert_eq!(report["device"], "emulator-5554");
+    assert_eq!(report["installed"], true);
+    assert_eq!(report["artifacts"][0], "app-x86_64-debug.apk");
+    assert_eq!(report["warnings"][0]["state"], "warning");
+    assert_eq!(report["warnings"][0]["advice"], "Do not pass it on.");
+}

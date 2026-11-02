@@ -63,13 +63,37 @@ impl Finding {
         }
     }
 
-    fn warning(name: impl Into<String>, advice: impl Into<String>) -> Self {
+    pub(crate) fn warning(name: impl Into<String>, advice: impl Into<String>) -> Self {
         Finding {
             name: name.into(),
             state: State::Warning,
             advice: advice.into(),
         }
     }
+
+    pub(crate) fn to_json(&self) -> serde_json::Value {
+        let state = match self.state {
+            State::Ok => "ok",
+            State::Missing => "missing",
+            State::Warning => "warning",
+        };
+        // The line breaks are the terminal's. In JSON they are padding.
+        let advice = self
+            .advice
+            .lines()
+            .map(str::trim)
+            .collect::<Vec<_>>()
+            .join(" ");
+        serde_json::json!({ "name": self.name, "state": state, "advice": advice })
+    }
+}
+
+/// `doctor --json`: one document, for a caller that decides from it.
+pub fn to_json(findings: &[Finding]) -> serde_json::Value {
+    serde_json::json!({
+        "ready": !blocked(findings),
+        "findings": findings.iter().map(Finding::to_json).collect::<Vec<_>>(),
+    })
 }
 
 /// Every check that applies to `targets`.
@@ -80,6 +104,8 @@ pub fn examine(
     release: bool,
 ) -> Vec<Finding> {
     let mut findings = vec![shared_startup(project), native_shell(project), tauri_cli()];
+    findings.extend(shell_agreement(project, config));
+    findings.extend(launcher_icons(project));
     findings.extend(release_database(config, release));
 
     for target in targets {
@@ -116,6 +142,87 @@ pub(crate) fn release_database(config: &NativeConfig, release: bool) -> Option<F
              for data that belongs on the device.",
         )
     })
+}
+
+/// The framework's mark on an application that is not the framework.
+fn launcher_icons(project: &Project) -> Option<Finding> {
+    crate::icons::is_placeholder(project).then(|| {
+        Finding::warning(
+            "launcher icons",
+            "native/icons/ is still the Rahti mark, so that is what users will see.\n   \
+             Fix: cargo rahti native icon path/to/logo.svg",
+        )
+    })
+}
+
+/// Whether the shell's files still say what `rahti.native.json` says.
+///
+/// `init` carries these values into the shell, and rightly leaves a file you
+/// edited alone. So after a rename an edited shell keeps the old name, and the
+/// only trace is one line in the output of the `init` that kept it.
+pub(crate) fn shell_agreement(project: &Project, config: &NativeConfig) -> Option<Finding> {
+    let native = project.native_dir();
+    let mut stale = Vec::new();
+
+    if let Ok(source) = std::fs::read_to_string(native.join("src/lib.rs")) {
+        for (constant, wanted) in [
+            ("WINDOW_TITLE", &config.window.title),
+            ("IDENTIFIER", &config.identifier),
+        ] {
+            if let Some(found) = shell_constant(&source, constant)
+                && found != *wanted
+            {
+                stale.push(format!(
+                    "native/src/lib.rs: {constant} is {found:?}, and rahti.native.json says {wanted:?}"
+                ));
+            }
+        }
+    }
+
+    if let Some(conf) = std::fs::read_to_string(native.join("tauri.conf.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+    {
+        for (field, wanted) in [
+            ("productName", &config.product_name),
+            ("identifier", &config.identifier),
+            ("version", &config.version),
+        ] {
+            if let Some(found) = conf[field].as_str()
+                && found != wanted
+            {
+                stale.push(format!(
+                    "native/tauri.conf.json: {field} is {found:?}, and rahti.native.json says {wanted:?}"
+                ));
+            }
+        }
+    }
+
+    if stale.is_empty() {
+        return native
+            .join("src/lib.rs")
+            .is_file()
+            .then(|| Finding::ok("shell agrees with rahti.native.json", String::new()));
+    }
+
+    Some(Finding::warning(
+        "shell agrees with rahti.native.json",
+        format!(
+            "{}\n   \
+             Fix: change those values by hand if the file was edited on purpose, or run\n   \
+             cargo rahti native init --force, which does not keep what it replaces.",
+            stale.join("\n   ")
+        ),
+    ))
+}
+
+/// The value of a `const NAME: &str = "…";` line in the generated shell.
+fn shell_constant(source: &str, name: &str) -> Option<String> {
+    let prefix = format!("const {name}: &str = ");
+    let line = source
+        .lines()
+        .find_map(|line| line.strip_prefix(prefix.as_str()))?;
+    serde_json::from_str(line.trim().strip_suffix(';')?).ok()
 }
 
 fn shared_startup(project: &Project) -> Finding {

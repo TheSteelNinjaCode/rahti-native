@@ -453,3 +453,55 @@ version = \"1.0.0\"
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+// ------------------------------------------------------------ product name
+
+const TAURI_STRINGS: &str = r#"<resources>
+    <string name="app_name">"Old Name"</string>
+    <string name="main_activity_title">"Old Name"</string>
+</resources>
+"#;
+
+fn with_strings(label: &str, strings: &str) -> std::path::PathBuf {
+    let root = generated(label, TAURI_MANIFEST);
+    let values = root.join("app/src/main/res/values");
+    std::fs::create_dir_all(&values).unwrap();
+    std::fs::write(values.join("strings.xml"), strings).unwrap();
+    root
+}
+
+fn strings_of(root: &std::path::Path) -> String {
+    std::fs::read_to_string(root.join("app/src/main/res/values/strings.xml")).unwrap()
+}
+
+#[test]
+fn a_rename_reaches_the_android_launcher() {
+    // Tauri writes this file once, so without this the Windows package takes
+    // the new name and the phone keeps the old one.
+    let root = with_strings("rename", TAURI_STRINGS);
+    crate::run::sync_android_name(&root, "ilnaya").expect("the name applies");
+
+    let strings = strings_of(&root);
+    assert!(strings.contains(r#"<string name="app_name">"ilnaya"</string>"#));
+    assert!(strings.contains(r#"<string name="main_activity_title">"ilnaya"</string>"#));
+    assert!(!strings.contains("Old Name"));
+}
+
+#[test]
+fn a_name_android_would_misread_is_escaped() {
+    let root = with_strings("escape", TAURI_STRINGS);
+    crate::run::sync_android_name(&root, r#"Tom & "Jerry's" <App>"#).expect("the name applies");
+
+    let strings = strings_of(&root);
+    assert!(
+        strings.contains(r#""Tom &amp; \"Jerry's\" &lt;App>""#),
+        "{strings}"
+    );
+}
+
+#[test]
+fn a_strings_file_this_tool_does_not_recognise_is_reported() {
+    let root = with_strings("unknown", "<resources></resources>");
+    let error = crate::run::sync_android_name(&root, "ilnaya").expect_err("no anchor");
+    assert!(error.to_string().contains("app_name"), "{error}");
+}

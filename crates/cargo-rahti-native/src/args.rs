@@ -28,6 +28,7 @@ use rahti_native::Platform;
 pub enum Command {
     Init(Init),
     Doctor(Doctor),
+    Icon(Icon),
     Dev(Dev),
     Build(Build),
     Help,
@@ -57,6 +58,16 @@ pub struct Doctor {
     pub target: Option<Platform>,
     /// Also check what only a release build needs — signing, most of all.
     pub release: bool,
+    /// The findings as one JSON document on stdout, and nothing else there.
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Icon {
+    /// A square PNG or SVG, relative to the working directory.
+    pub source: String,
+    /// `#rgb` or `#rrggbb` behind the Android adaptive icon. White by default.
+    pub background: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,6 +85,54 @@ pub struct Build {
     /// A debug build, which on Android is what installs without signing
     /// configured.
     pub debug: bool,
+    /// Build one Android ABI rather than all four. A device takes only its
+    /// own, and a debug package of all four can outgrow an emulator's storage.
+    pub abi: Option<AndroidAbi>,
+    /// Install on this `adb` serial and start the application. Implies an APK,
+    /// and the device's own ABI unless `abi` names another.
+    pub device: Option<String>,
+}
+
+/// One of the four ABIs an Android package can carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AndroidAbi {
+    Arm64,
+    Arm,
+    X86,
+    X86_64,
+}
+
+impl AndroidAbi {
+    /// Android's name, which `ro.product.cpu.abi` reports, or Tauri's.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "arm64-v8a" | "aarch64" | "arm64" => Some(AndroidAbi::Arm64),
+            "armeabi-v7a" | "armv7" | "arm" => Some(AndroidAbi::Arm),
+            "x86" | "i686" => Some(AndroidAbi::X86),
+            "x86_64" => Some(AndroidAbi::X86_64),
+            _ => None,
+        }
+    }
+
+    /// What `cargo tauri android build --target` takes.
+    pub fn tauri_target(self) -> &'static str {
+        match self {
+            AndroidAbi::Arm64 => "aarch64",
+            AndroidAbi::Arm => "armv7",
+            AndroidAbi::X86 => "i686",
+            AndroidAbi::X86_64 => "x86_64",
+        }
+    }
+
+    /// The Gradle flavor, which names the directory the package lands in.
+    pub fn flavor(self) -> &'static str {
+        match self {
+            AndroidAbi::Arm64 => "arm64",
+            AndroidAbi::Arm => "arm",
+            AndroidAbi::X86 => "x86",
+            AndroidAbi::X86_64 => "x86_64",
+        }
+    }
 }
 
 /// What an Android build produces.
@@ -116,13 +175,14 @@ pub fn parse(args: &[&str]) -> Result<Command, String> {
     match args.first().copied() {
         Some("init") => parse_init(&args[1..]),
         Some("doctor") => parse_doctor(&args[1..]),
+        Some("icon") => parse_icon(&args[1..]),
         Some("dev") => parse_dev(&args[1..]),
         Some("build") => parse_build(&args[1..]),
         Some("--version" | "-V") => Ok(Command::Version),
         Some("help" | "--help" | "-h") | None => Ok(Command::Help),
         Some(other) => Err(format!(
             "`{other}` is not a `cargo rahti native` command.\n  \
-             Expected one of: init, doctor, dev, build."
+             Expected one of: init, doctor, icon, dev, build."
         )),
     }
 }
@@ -157,6 +217,7 @@ fn parse_doctor(args: &[&str]) -> Result<Command, String> {
         match args[i] {
             "--target" => doctor.target = Some(target(args, &mut i)?),
             "--release" => doctor.release = true,
+            "--json" => doctor.json = true,
             "--help" | "-h" => return Ok(Command::Help),
             other => return Err(unknown(other, "doctor")),
         }
@@ -164,6 +225,49 @@ fn parse_doctor(args: &[&str]) -> Result<Command, String> {
     }
 
     Ok(Command::Doctor(doctor))
+}
+
+fn parse_icon(args: &[&str]) -> Result<Command, String> {
+    let mut source = None;
+    let mut background = None;
+    let mut i = 0;
+
+    while i < args.len() {
+        match args[i] {
+            "--background" => {
+                let raw = value(args, &mut i, "--background")?;
+                if !hex_colour(&raw) {
+                    return Err(format!(
+                        "`{raw}` is not a colour `--background` takes.\n  \
+                         Expected `#rgb` or `#rrggbb`."
+                    ));
+                }
+                background = Some(raw);
+            }
+            "--help" | "-h" => return Ok(Command::Help),
+            flag if flag.starts_with('-') => return Err(unknown(flag, "icon")),
+            path if source.is_none() => source = Some(path.to_string()),
+            extra => {
+                return Err(format!(
+                    "`icon` takes one source image, and `{extra}` is a second."
+                ));
+            }
+        }
+        i += 1;
+    }
+
+    let source = source.ok_or_else(|| {
+        "`icon` needs a square PNG or SVG.\n  \
+         cargo rahti native icon public/images/logo.svg"
+            .to_string()
+    })?;
+    Ok(Command::Icon(Icon { source, background }))
+}
+
+fn hex_colour(value: &str) -> bool {
+    value.strip_prefix('#').is_some_and(|digits| {
+        matches!(digits.len(), 3 | 6) && digits.chars().all(|c| c.is_ascii_hexdigit())
+    })
 }
 
 fn parse_dev(args: &[&str]) -> Result<Command, String> {
@@ -197,6 +301,8 @@ fn parse_build(args: &[&str]) -> Result<Command, String> {
     let mut platform = None;
     let mut format = None;
     let mut debug = false;
+    let mut abi = None;
+    let mut device = None;
     let mut i = 0;
 
     while i < args.len() {
@@ -213,6 +319,16 @@ fn parse_build(args: &[&str]) -> Result<Command, String> {
                 })?);
             }
             "--debug" => debug = true,
+            "--abi" => {
+                let raw = value(args, &mut i, "--abi")?;
+                abi = Some(AndroidAbi::parse(&raw).ok_or_else(|| {
+                    format!(
+                        "`{raw}` is not an Android ABI.\n  \
+                         Expected `arm64-v8a`, `armeabi-v7a`, `x86` or `x86_64`."
+                    )
+                })?);
+            }
+            "--device" => device = Some(value(args, &mut i, "--device")?),
             "--help" | "-h" => return Ok(Command::Help),
             other => return Err(unknown(other, "build")),
         }
@@ -230,11 +346,28 @@ fn parse_build(args: &[&str]) -> Result<Command, String> {
              A Windows build produces an executable and an installer, and takes no format."
         ));
     }
+    if (abi.is_some() || device.is_some()) && target != Platform::Android {
+        return Err(
+            "`--abi` and `--device` describe an Android package, and only Android has \
+             either.\n  Drop them, or use `--target android`."
+                .to_string(),
+        );
+    }
+    // Refused for the same reason: nothing installs an AAB on a device.
+    if device.is_some() && format == Some(AndroidFormat::Aab) {
+        return Err(
+            "`--device` installs the package, and an AAB does not install.\n  \
+             Drop `--format aab`, which leaves an APK."
+                .to_string(),
+        );
+    }
 
     Ok(Command::Build(Build {
         target,
         format,
         debug,
+        abi,
+        device,
     }))
 }
 

@@ -67,18 +67,40 @@ picks it up from `cargo rahti native init`, unless its `build.rs` was edited.
 ```text
 cargo rahti native init --identifier com.example.myapp --windows --android
 cargo rahti native doctor
+cargo rahti native icon  public/images/logo.svg
 cargo rahti native dev   --target windows
 cargo rahti native dev   --target android
 cargo rahti native build --target windows
 cargo rahti native build --target android --format apk
 cargo rahti native build --target android --format aab
+cargo rahti native build --target android --debug --device emulator-5554
 ```
 
 `cargo rahti-native …` reaches the same tool directly, through cargo's own
 subcommand dispatch. If the helper is not installed, `cargo rahti native`
 prints the one line that installs it and does nothing else.
 
-`build` prints the absolute path of every artifact it produced.
+`build` prints the absolute path of every artifact this run produced, and
+nothing an earlier build left in the output directories.
+
+### From an agent
+
+Every command here ends on its own, and each conclusion can be read without
+scraping a terminal:
+
+| Question | Answer |
+| --- | --- |
+| Can this project build? | `doctor --json`: `ready`, and each finding's `name`, `state` and `advice`. Add `--release` for what a release needs. It exits non-zero when `ready` is false. |
+| What did the build produce, and what should be said about it? | `native/.rahti/build.json`: `target`, `profile`, `abi`, `device`, `installed`, `artifacts` and `warnings`. |
+| Does the change work on a device? | `build --target android --debug --device <serial>` builds an APK for that device's ABI, installs it, starts the application and exits. `dev` does the same and stays running. |
+
+`--device` takes a serial from `adb devices`, and is refused before anything
+compiles if that device is not attached. `--abi` builds one ABI without a
+device. Prefer either to a universal debug package, which carries four debug
+libraries and can be too large for an emulator to install.
+
+A debug package carries the values `development.env` names, and the build says
+which. Keep it on your own devices.
 
 ## Development reload
 
@@ -184,13 +206,21 @@ in a Rahti project that depends on Tauri, so `cargo check --workspace`,
 
 The generated icons are the **Rahti mark** — a real icon set, at every size
 Windows and Android ask for, so a first build looks like an application rather
-than a blank square. It is still not *your* mark: replace it with
+than a blank square. It is still not *your* mark, and `doctor` warns until you
+replace it with
 
 ```bash
-cargo tauri icon path/to/icon.png
+cargo rahti native icon path/to/logo.svg
 ```
 
-which rewrites the whole set from one square PNG.
+which rewrites the whole set from one square PNG or SVG. `--background '#0a2540'`
+sets the colour behind the Android adaptive icon, which is white by default.
+
+Use this rather than `cargo tauri icon`, which it calls for the drawing. Android
+shows the central 72dp of a 108dp adaptive layer through a mask, and Tauri draws
+the layer edge to edge, so launchers cut off whatever is near the edges of the
+logo. `icon` keeps the artwork inside the safe zone, and writes only the files
+this shell uses.
 
 The Android half matters more than it looks. `cargo tauri android init` writes
 a project whose `res/mipmap-*` already holds the project template's own

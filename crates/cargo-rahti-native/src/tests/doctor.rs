@@ -1,3 +1,5 @@
+use super::*;
+
 #[test]
 fn tauri_2_8_is_the_first_cli_with_external_watch_folders() {
     for version in ["tauri-cli 2.8.0", "tauri-cli 2.11.4"] {
@@ -75,4 +77,74 @@ fn a_remote_release_is_told_it_has_no_database() {
         "{}",
         finding.advice
     );
+}
+
+// ------------------------------------------------------------ shell drift
+
+fn shell_project(label: &str, lib_rs: &str, conf: &str) -> Project {
+    let root = std::env::temp_dir().join(format!(
+        "rahti-native-doctor-{label}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("native/src")).unwrap();
+    std::fs::write(root.join("native/src/lib.rs"), lib_rs).unwrap();
+    std::fs::write(root.join("native/tauri.conf.json"), conf).unwrap();
+    Project {
+        root,
+        package: "fixture".to_string(),
+        lib: "fixture".to_string(),
+        version: "0.1.0".to_string(),
+    }
+}
+
+fn config() -> NativeConfig {
+    NativeConfig::new("ilnaya", "com.ilnaya.app", "0.1.0", &["windows"])
+}
+
+const AGREEING_LIB: &str = "const IDENTIFIER: &str = \"com.ilnaya.app\";\n\
+                            const WINDOW_TITLE: &str = \"ilnaya\";\n";
+const AGREEING_CONF: &str =
+    r#"{"productName":"ilnaya","identifier":"com.ilnaya.app","version":"0.1.0"}"#;
+
+#[test]
+fn a_shell_that_agrees_with_the_configuration_says_so() {
+    let project = shell_project("agrees", AGREEING_LIB, AGREEING_CONF);
+    let finding = shell_agreement(&project, &config()).expect("a shell to check");
+    assert!(finding.state == State::Ok);
+}
+
+#[test]
+fn an_edited_shell_left_behind_by_a_rename_is_named_exactly() {
+    // `init` keeps an edited lib.rs, so this is the only place the stale title
+    // is ever said after that one run.
+    let lib = AGREEING_LIB.replace("\"ilnaya\"", "\"IlNaya\"");
+    let project = shell_project("stale-lib", &lib, AGREEING_CONF);
+    let finding = shell_agreement(&project, &config()).expect("a finding");
+
+    assert!(finding.state == State::Warning);
+    assert!(finding.advice.contains("native/src/lib.rs: WINDOW_TITLE"));
+    assert!(finding.advice.contains("\"IlNaya\""));
+}
+
+#[test]
+fn a_stale_tauri_conf_is_named_too() {
+    let conf = AGREEING_CONF.replace("0.1.0", "0.0.9");
+    let project = shell_project("stale-conf", AGREEING_LIB, &conf);
+    let finding = shell_agreement(&project, &config()).expect("a finding");
+
+    assert!(finding.state == State::Warning);
+    assert!(finding.advice.contains("native/tauri.conf.json: version"));
+}
+
+#[test]
+fn doctor_json_is_a_decision_rather_than_a_report() {
+    let ready = to_json(&[Finding::warning("adb", "Not on PATH.\n   Add it.")]);
+    assert_eq!(ready["ready"], true);
+    assert_eq!(ready["findings"][0]["state"], "warning");
+    assert_eq!(ready["findings"][0]["advice"], "Not on PATH. Add it.");
+
+    let blocked = to_json(&[Finding::missing("Android SDK", "Install it.")]);
+    assert_eq!(blocked["ready"], false);
+    assert_eq!(blocked["findings"][0]["state"], "missing");
 }

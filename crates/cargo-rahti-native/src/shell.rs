@@ -880,19 +880,22 @@ cargo rahti native init --force
 | `capabilities/default.json` | What the application's pages may ask the operating system for. |
 | `src/lib.rs` | The shell: paths, server, window, and the five native commands. |
 | `src/main.rs` | The desktop binary. Android calls the library instead. |
-| `icons/` | **Placeholders.** Replace them before you ship anything. |
+| `icons/` | **The Rahti mark until you replace it.** Do that before you ship anything. |
 | `dist/` | A page that is never shown; Tauri's bundler requires a frontend directory. |
 
 ## Icons
 
 The generated icons are the Rahti mark, at every size Windows and Android ask
 for. That is a real icon set rather than a placeholder, and it is still not
-yours — replace it. Tauri's own tool takes a single square PNG and writes every
-size both platforms want:
+yours — replace it. This takes a single square PNG or SVG and writes every size
+both platforms want:
 
 ```bash
-cargo tauri icon path/to/icon.png
+cargo rahti native icon path/to/logo.svg
 ```
+
+Use it rather than `cargo tauri icon`, which draws the Android adaptive layer
+edge to edge, so launchers crop the logo.
 
 ## Release signing
 

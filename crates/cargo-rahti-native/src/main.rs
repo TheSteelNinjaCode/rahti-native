@@ -79,6 +79,18 @@ fn main() -> ExitCode {
                     .collect(),
             };
 
+            if doctor_args.json {
+                let findings = doctor::examine(project, &config, &targets, doctor_args.release);
+                println!("{}", doctor::to_json(&findings));
+                if doctor::blocked(&findings) {
+                    return Err(NativeError::new(
+                        "doctor",
+                        "something a build needs is missing.",
+                    ));
+                }
+                return Ok(());
+            }
+
             println!();
             println!("  {} {}", config.product_name, config.identifier);
             println!(
@@ -104,6 +116,7 @@ fn main() -> ExitCode {
             println!("  Ready.");
             Ok(())
         }),
+        Command::Icon(ref icon_args) => in_project(|project| icons::generate(project, icon_args)),
         Command::Dev(ref dev_args) => in_project(|project| {
             let config = load_config(project)?;
             run::dev(project, &config, dev_args)
@@ -150,9 +163,11 @@ controls on screen are a WebView's, not the platform's.
 
 USAGE:
     cargo rahti native init [options]
-    cargo rahti native doctor [--target <target>] [--release]
+    cargo rahti native doctor [--target <target>] [--release] [--json]
+    cargo rahti native icon <image> [--background <colour>]
     cargo rahti native dev --target <target> [--device <name>]
     cargo rahti native build --target <target> [--format apk|aab] [--debug]
+                             [--abi <abi>] [--device <serial>]
 
     <target> is `windows` or `android`.
 
@@ -193,6 +208,18 @@ DOCTOR:
                        configured.
     --release          Also check what only a release needs — signing, most
                        of all.
+    --json             One JSON document on stdout: `ready`, and each
+                       finding's `name`, `state` and `advice`. For agents and
+                       scripts. Exits non-zero when `ready` is false.
+
+ICON:
+    Rewrites native/icons/ from one square PNG or SVG, at every size Windows
+    and Android ask for, with the Android adaptive layer inside the safe zone
+    launcher masks leave alone. Use this rather than `cargo tauri icon`, which
+    draws that layer edge to edge, so launchers crop the logo.
+
+    --background <c>   `#rgb` or `#rrggbb` behind the Android adaptive icon.
+                       White by default.
 
 DEV:
     Builds and launches the application in a WebView, with development
@@ -202,12 +229,20 @@ DEV:
 
 BUILD:
     Windows produces an executable and an installer. Android produces an APK,
-    an AAB, or both. Absolute paths to everything are printed at the end.
+    an AAB, or both. Absolute paths to what this build produced are printed at
+    the end and recorded, with its warnings, in native/.rahti/build.json.
 
     --format apk       Installs on a device directly. What testing wants.
     --format aab       What Google Play takes. Not installable as it is.
     --debug            A debug build. On Android this is what installs
-                       without signing configured.
+                       without signing configured. It carries the values
+                       `development.env` names, so do not pass it on.
+    --abi <abi>        One Android ABI: arm64-v8a, armeabi-v7a, x86 or x86_64.
+                       Much smaller than all four, which a debug build can
+                       make too large for an emulator.
+    --device <serial>  An `adb devices` serial. Builds an APK for that device's
+                       ABI, installs it and starts the application, then exits.
+                       `dev` is the same for a session that stays running.
 
     -h, --help         Print this message.
     -V, --version      Print the version.

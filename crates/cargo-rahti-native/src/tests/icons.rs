@@ -128,3 +128,67 @@ fn the_desktop_and_android_sets_do_not_overlap() {
     }
     assert_eq!(all().count(), DESKTOP.len() + ANDROID.len());
 }
+
+// ----------------------------------------------------------------- `icon`
+
+#[test]
+fn base64_is_the_standard_alphabet_with_padding() {
+    // RFC 4648's own test vectors.
+    for (input, expected) in [
+        ("", ""),
+        ("f", "Zg=="),
+        ("fo", "Zm8="),
+        ("foo", "Zm9v"),
+        ("foob", "Zm9vYg=="),
+        ("fooba", "Zm9vYmE="),
+        ("foobar", "Zm9vYmFy"),
+    ] {
+        assert_eq!(base64(input.as_bytes()), expected, "{input}");
+    }
+}
+
+#[test]
+fn the_adaptive_artwork_stays_inside_what_a_launcher_mask_shows() {
+    let svg = adaptive_svg(b"foo", "image/svg+xml");
+
+    assert!(
+        svg.contains("href=\"data:image/svg+xml;base64,Zm9v\""),
+        "{svg}"
+    );
+    // Centred, and inside the 66dp of 108dp that every mask leaves visible.
+    assert!(svg.contains("width=\"573\""), "{svg}");
+    assert!(svg.contains("x=\"225\" y=\"225\""), "{svg}");
+    const { assert!(ADAPTIVE_ART_PERCENT * 108 <= 66 * 100) };
+}
+
+#[test]
+fn only_the_two_formats_tauri_draws_from_are_taken() {
+    assert_eq!(media_type(Path::new("a.SVG")).unwrap(), "image/svg+xml");
+    assert_eq!(media_type(Path::new("a.png")).unwrap(), "image/png");
+    assert!(media_type(Path::new("a.jpg")).is_err());
+    assert!(media_type(Path::new("logo")).is_err());
+}
+
+fn project_with_icon(label: &str, bytes: &[u8]) -> Project {
+    let root =
+        std::env::temp_dir().join(format!("rahti-native-icons-{label}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("native/icons")).unwrap();
+    std::fs::write(root.join("native/icons/icon.png"), bytes).unwrap();
+    Project {
+        root,
+        package: "fixture".to_string(),
+        lib: "fixture".to_string(),
+        version: "0.1.0".to_string(),
+    }
+}
+
+#[test]
+fn the_framework_mark_is_recognised_and_a_replacement_is_not() {
+    let placeholder = DESKTOP.iter().find(|i| i.path == "icon.png").unwrap();
+    let project = project_with_icon("placeholder", placeholder.bytes);
+    assert!(is_placeholder(&project));
+
+    let project = project_with_icon("replaced", b"somebody's logo");
+    assert!(!is_placeholder(&project));
+}

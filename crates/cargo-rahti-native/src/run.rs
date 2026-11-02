@@ -17,14 +17,16 @@
 //!   on Android by wiring the key into the generated Gradle project, because
 //!   Tauri reads no signing key from the environment there;
 //! - the artifacts are found and their absolute paths printed, because
-//!   "finished in 4m12s" is not an answer to "where is the installer".
+//!   "finished in 4m12s" is not an answer to "where is the installer", and
+//!   recorded in `native/.rahti/build.json` for whatever runs next.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::SystemTime;
 
 use rahti_native::{DatabaseMode, NativeConfig, NativeError, Platform};
 
-use crate::args::{AndroidFormat, Build, Dev};
+use crate::args::{AndroidAbi, AndroidFormat, Build, Dev};
 use crate::doctor;
 use crate::project::Project;
 
@@ -137,7 +139,29 @@ pub(crate) fn application_watch_folders(project: &Project, target: Platform) -> 
 }
 
 pub fn build(project: &Project, config: &NativeConfig, args: &Build) -> Result<(), NativeError> {
-    prepare(project, config, args.target, !args.debug)?;
+    let started = SystemTime::now();
+    let mut warnings = prepare(project, config, args.target, !args.debug)?;
+    warnings.extend(debug_credentials(project, config, args));
+
+    // A build that succeeds says nothing about what it could not do, so what
+    // `doctor` warned about is said here, ahead of Tauri's own output.
+    if !warnings.is_empty() {
+        doctor::report(&warnings);
+        println!();
+    }
+
+    // Before the build: a serial that is not attached should cost a sentence,
+    // not several minutes of compiling.
+    let abi = match (args.abi, &args.device) {
+        (Some(abi), _) => Some(abi),
+        (None, Some(device)) => Some(device_abi(device)?),
+        (None, None) => None,
+    };
+    // `--device` has to install something, and only an APK installs.
+    let format = match &args.device {
+        Some(_) => Some(AndroidFormat::Apk),
+        None => args.format,
+    };
 
     let mut command = match args.target {
         Platform::Android => {
@@ -146,7 +170,7 @@ pub fn build(project: &Project, config: &NativeConfig, args: &Build) -> Result<(
             // `apk` installs on a device; `aab` is what Google Play takes and
             // is not installable as it is. Naming neither builds Tauri's
             // default, which is both.
-            match args.format {
+            match format {
                 Some(AndroidFormat::Apk) => {
                     command.args(["--apk"]);
                 }
@@ -157,6 +181,9 @@ pub fn build(project: &Project, config: &NativeConfig, args: &Build) -> Result<(
             }
             if args.debug {
                 command.arg("--debug");
+            }
+            if let Some(abi) = abi {
+                command.args(["--target", abi.tauri_target(), "--split-per-abi"]);
             }
             android_environment(&mut command, project)?;
             command
@@ -172,26 +199,152 @@ pub fn build(project: &Project, config: &NativeConfig, args: &Build) -> Result<(
     };
     command.current_dir(project.native_dir());
 
-    if let Some(format) = args.format {
+    if let Some(format) = format {
         println!("  format: {}", format.name());
     }
     println!("  running {}", describe(&command));
     println!();
     execute(command, "build")?;
 
-    report_artifacts(project, args);
+    let artifacts = report_artifacts(project, args, abi, format, started);
+
+    let installed = match &args.device {
+        Some(device) => {
+            install_on_device(device, &artifacts, &config.identifier)?;
+            true
+        }
+        None => false,
+    };
+
+    write_build_report(project, args, abi, &artifacts, &warnings, installed)
+}
+
+/// The one thing a successful debug build can do badly: be passed on.
+fn debug_credentials(
+    project: &Project,
+    config: &NativeConfig,
+    args: &Build,
+) -> Option<doctor::Finding> {
+    if !args.debug {
+        return None;
+    }
+    let names: Vec<String> = config
+        .development_env()
+        .into_iter()
+        .filter(|name| project.env_value(name).is_some())
+        .collect();
+    (!names.is_empty()).then(|| {
+        doctor::Finding::warning(
+            "debug package",
+            format!(
+                "This package carries {} from `.env`, and anything in a package can be read\n   \
+                 back out of it. Use it on your own devices and do not pass it on.",
+                names.join(", ")
+            ),
+        )
+    })
+}
+
+// --------------------------------------------------------------- device
+
+/// The ABI of an attached device.
+fn device_abi(device: &str) -> Result<AndroidAbi, NativeError> {
+    let attached = Command::new(doctor::adb())
+        .arg("devices")
+        .output()
+        .map_err(|e| NativeError::new("android", format!("could not run adb: {e}")))?;
+    let attached = String::from_utf8_lossy(&attached.stdout);
+    let serials = attached_devices(&attached);
+
+    if !serials.contains(&device) {
+        return Err(NativeError::new(
+            "android",
+            format!(
+                "`{device}` is not an attached device. `adb devices` lists: {}.",
+                if serials.is_empty() {
+                    "nothing ready".to_string()
+                } else {
+                    serials.join(", ")
+                }
+            ),
+        ));
+    }
+
+    let output = Command::new(doctor::adb())
+        .args(["-s", device, "shell", "getprop", "ro.product.cpu.abi"])
+        .output()
+        .map_err(|e| NativeError::new("android", format!("could not run adb: {e}")))?;
+    let reported = String::from_utf8_lossy(&output.stdout);
+
+    AndroidAbi::parse(&reported).ok_or_else(|| {
+        NativeError::new(
+            "android",
+            format!(
+                "`{device}` reports the ABI `{}`, which this tool does not know.\n  \
+                 Name one with `--abi`.",
+                reported.trim()
+            ),
+        )
+    })
+}
+
+/// Install the package this build produced, and start it.
+fn install_on_device(
+    device: &str,
+    artifacts: &[PathBuf],
+    identifier: &str,
+) -> Result<(), NativeError> {
+    let package = artifacts
+        .iter()
+        .find(|path| path.extension().is_some_and(|e| e == "apk"))
+        .ok_or_else(|| NativeError::new("android", "this build produced no APK to install."))?;
+
+    println!();
+    println!("  installing on {device}");
+    adb_on(
+        device,
+        "install",
+        &["install", "-r", &package.display().to_string()],
+    )?;
+
+    let activity = format!("{identifier}/.MainActivity");
+    adb_on(device, "start", &["shell", "am", "start", "-n", &activity])?;
+    println!("  started {activity} on {device}");
     Ok(())
+}
+
+/// One `adb` command on one device, with its own words if it fails.
+fn adb_on(device: &str, what: &str, args: &[&str]) -> Result<(), NativeError> {
+    let output = Command::new(doctor::adb())
+        .args(["-s", device])
+        .args(args)
+        .output()
+        .map_err(|e| NativeError::new("android", format!("could not run adb: {e}")))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(NativeError::new(
+        "android",
+        format!(
+            "`adb {what}` failed on {device}:\n  {}{}",
+            String::from_utf8_lossy(&output.stdout).trim(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+    ))
 }
 
 // --------------------------------------------------------------- checks
 
 /// Everything that has to be true before an expensive command starts.
+///
+/// Returns what did not stop the build but should be said.
 fn prepare(
     project: &Project,
     config: &NativeConfig,
     target: Platform,
     release: bool,
-) -> Result<(), NativeError> {
+) -> Result<Vec<doctor::Finding>, NativeError> {
     if !config.builds(target.name()) {
         return Err(NativeError::new(
             "config",
@@ -226,7 +379,10 @@ fn prepare(
              Run `cargo rahti native doctor` after fixing it.",
         ));
     }
-    Ok(())
+    Ok(findings
+        .into_iter()
+        .filter(|finding| finding.state == doctor::State::Warning)
+        .collect())
 }
 
 /// `cargo tauri android init` has not been run yet.
@@ -252,8 +408,61 @@ fn ensure_android_project(project: &Project, config: &NativeConfig) -> Result<()
     install_android_icons(project, &generated)?;
     configure_signing(&generated)?;
 
-    let _ = config;
+    sync_android_name(&generated, &config.product_name)?;
+
     Ok(())
+}
+
+/// Give the generated Android project the current product name.
+///
+/// `cargo tauri android init` writes the name into `res/values/strings.xml`
+/// once, and nothing reads `tauri.conf.json` for it afterwards. So after a
+/// rename the Windows package has the new name and the Android launcher keeps
+/// the old one, with nothing in the build to say so.
+pub(crate) fn sync_android_name(generated: &Path, name: &str) -> Result<(), NativeError> {
+    let path = generated.join("app/src/main/res/values/strings.xml");
+    let strings =
+        std::fs::read_to_string(&path).map_err(|e| NativeError::io("android", &path, e))?;
+
+    let mut patched = strings.clone();
+    for resource in ["app_name", "main_activity_title"] {
+        patched = with_android_string(&patched, resource, name).ok_or_else(|| {
+            NativeError::at(
+                "android",
+                &path,
+                format!(
+                    "this file has no `{resource}` string, so `cargo rahti native` cannot give \
+                     the application its name.\n  \
+                     Add it by hand, or delete native/gen/android to generate it again."
+                ),
+            )
+        })?;
+    }
+
+    if patched != strings {
+        std::fs::write(&path, patched).map_err(|e| NativeError::io("android", &path, e))?;
+        println!("  android: application name is now {name}");
+    }
+    Ok(())
+}
+
+/// `strings` with one resource's value replaced, or `None` if it is not there.
+fn with_android_string(strings: &str, resource: &str, value: &str) -> Option<String> {
+    let open = format!("<string name=\"{resource}\">");
+    let start = strings.find(&open)? + open.len();
+    let end = start + strings[start..].find("</string>")?;
+
+    // Quoted as Tauri quotes it, which is what makes an apostrophe legal.
+    let escaped = value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('&', "&amp;")
+        .replace('<', "&lt;");
+    Some(format!(
+        "{}\"{escaped}\"{}",
+        &strings[..start],
+        &strings[end..]
+    ))
 }
 
 /// Put the application's launcher icons into the generated Android project.
@@ -639,12 +848,63 @@ pub(crate) fn target_directory(native: &Path, override_dir: Option<&std::ffi::Os
         .unwrap_or_else(|| native.join("target"))
 }
 
-/// Print the absolute path of everything the build produced.
+/// The directories this Android build writes to, and no other.
+///
+/// Gradle keeps one directory per flavor and profile and never clears the
+/// others, so walking `outputs/` finds every package any earlier build left
+/// behind. An earlier single-ABI APK then sits in the list beside the one just
+/// built, under the same name, and installing it puts an old application on the
+/// device with nothing to say so.
+///
+/// Named here rather than filtered by date because Gradle leaves a package
+/// that is up to date alone, and an unchanged package is still this build's.
+pub(crate) fn android_output_dirs(
+    outputs: &Path,
+    abi: Option<AndroidAbi>,
+    format: Option<AndroidFormat>,
+    debug: bool,
+) -> Vec<(PathBuf, &'static str)> {
+    let flavor = abi.map_or("universal", AndroidAbi::flavor);
+    let (profile, capitalized) = if debug {
+        ("debug", "Debug")
+    } else {
+        ("release", "Release")
+    };
+    let apk = outputs.join("apk").join(flavor).join(profile);
+    let aab = outputs
+        .join("bundle")
+        .join(format!("{flavor}{capitalized}"));
+
+    match format {
+        Some(AndroidFormat::Apk) => vec![(apk, "apk")],
+        Some(AndroidFormat::Aab) => vec![(aab, "aab")],
+        None => vec![(apk, "apk"), (aab, "aab")],
+    }
+}
+
+/// Whether a file was written by a build that started at `started`.
+///
+/// Two seconds of grace, because FAT and some network drives keep modification
+/// times that coarsely.
+pub(crate) fn written_since(path: &Path, started: SystemTime) -> bool {
+    let earliest = started - std::time::Duration::from_secs(2);
+    std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .is_ok_and(|modified| modified >= earliest)
+}
+
+/// Print the absolute path of everything this build produced, and return it.
 ///
 /// Found by walking the output directories rather than by predicting the
 /// filenames, because a bundler's naming is its own and a printed path that
 /// does not exist is worse than none.
-fn report_artifacts(project: &Project, args: &Build) {
+fn report_artifacts(
+    project: &Project,
+    args: &Build,
+    abi: Option<AndroidAbi>,
+    format: Option<AndroidFormat>,
+    started: SystemTime,
+) -> Vec<PathBuf> {
     let native = project.native_dir();
     let profile = if args.debug { "debug" } else { "release" };
     let override_dir = std::env::var_os("CARGO_TARGET_DIR");
@@ -655,37 +915,87 @@ fn report_artifacts(project: &Project, args: &Build) {
     match args.target {
         Platform::Android => {
             let outputs = native.join("gen/android/app/build/outputs");
-            let wanted: &[&str] = match args.format {
-                Some(AndroidFormat::Apk) => &["apk"],
-                Some(AndroidFormat::Aab) => &["aab"],
-                None => &["apk", "aab"],
-            };
-            collect(&outputs, wanted, &mut found);
+            for (dir, extension) in android_output_dirs(&outputs, abi, format, args.debug) {
+                collect(&dir, &[extension], &mut found);
+            }
         }
         _ => {
             let target = target_dir.join(profile);
-            // The executable, then whatever the bundlers wrote.
+            // The bundlers rewrite their installers on every run, so one older
+            // than this build is from before a rename or a version bump.
+            collect(&target.join("bundle"), &["exe", "msi"], &mut found);
+            found.retain(|path| written_since(path, started));
+            // Not filtered: cargo leaves a current executable alone.
             let exe = target.join(format!("{}-native.exe", project.package));
             if exe.is_file() {
                 found.push(exe);
             }
-            collect(&target.join("bundle"), &["exe", "msi"], &mut found);
         }
     }
 
     println!();
+    found.sort();
     if found.is_empty() {
         println!("  The build reported success, but no package was found where one was");
         println!("  expected. Look under:");
         println!("    {}", target_dir.display());
-        return;
+        return found;
     }
 
     println!("  Built:");
-    found.sort();
-    for path in found {
+    for path in &found {
         println!("    {}", path.display());
     }
+    found
+}
+
+/// Where the last `build` is described for whatever runs next.
+pub(crate) fn build_report_path(project: &Project) -> PathBuf {
+    project.native_dir().join(".rahti/build.json")
+}
+
+/// Record what this build produced in `native/.rahti/build.json`.
+///
+/// A build's output is thousands of lines of somebody else's tooling, and an
+/// agent running one usually keeps only the end of it. This is the same answer
+/// as a file, so nothing has to be parsed out of a terminal.
+fn write_build_report(
+    project: &Project,
+    args: &Build,
+    abi: Option<AndroidAbi>,
+    artifacts: &[PathBuf],
+    warnings: &[doctor::Finding],
+    installed: bool,
+) -> Result<(), NativeError> {
+    let report = build_report(args, abi, artifacts, warnings, installed);
+    let path = build_report_path(project);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| NativeError::io("build", parent, e))?;
+    }
+    let text = serde_json::to_string_pretty(&report).unwrap_or_default();
+    std::fs::write(&path, text).map_err(|e| NativeError::io("build", &path, e))?;
+
+    println!();
+    println!("  Report: {}", path.display());
+    Ok(())
+}
+
+pub(crate) fn build_report(
+    args: &Build,
+    abi: Option<AndroidAbi>,
+    artifacts: &[PathBuf],
+    warnings: &[doctor::Finding],
+    installed: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "target": args.target.name(),
+        "profile": if args.debug { "debug" } else { "release" },
+        "abi": abi.map(AndroidAbi::flavor),
+        "device": args.device,
+        "installed": installed,
+        "artifacts": artifacts,
+        "warnings": warnings.iter().map(doctor::Finding::to_json).collect::<Vec<_>>(),
+    })
 }
 
 /// Every file under `dir` with one of `extensions`.
@@ -710,7 +1020,7 @@ fn collect(dir: &Path, extensions: &[&str], found: &mut Vec<PathBuf>) {
 // --------------------------------------------------------------- running
 
 /// Run it, inheriting the terminal so the tooling's own output is the output.
-fn execute(mut command: Command, what: &str) -> Result<(), NativeError> {
+pub(crate) fn execute(mut command: Command, what: &str) -> Result<(), NativeError> {
     let status = command.status().map_err(|e| {
         NativeError::new(
             "tauri",

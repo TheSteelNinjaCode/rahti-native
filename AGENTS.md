@@ -18,8 +18,8 @@ is a rule users read.
   loopback embedded server, the per-installation session key, the launch gate,
   the security headers, `rahti.native.json`, the capability allowlist, the
   `pp.native` bridge script.
-- `crates/cargo-rahti-native/` — the CLI: `init`, `doctor`, `dev`, `build`, and
-  the generated Tauri shell templates.
+- `crates/cargo-rahti-native/` — the CLI: `init`, `doctor`, `icon`, `dev`,
+  `build`, and the generated Tauri shell templates.
 
 ## Non-Negotiable Conventions
 
@@ -65,11 +65,20 @@ is a rule users read.
     entries and Tauri reports their directory as the URI `asset://localhost/`,
     which no file server can open — serving them from `resource_dir()` 404s
     every asset on every device.
-12. Android needs two patches applied to the Tauri-generated project on **every**
-    build, because `gen/android` is regenerated rather than reviewed: the
-    loopback network-security configuration, and the release signing wiring.
-    Both are idempotent and both refuse to guess at a project shape they do not
-    recognise.
+12. Android needs three patches applied to the Tauri-generated project on
+    **every** build, because `gen/android` is regenerated rather than reviewed:
+    the loopback network-security configuration, the release signing wiring, and
+    the product name in `strings.xml`. All are idempotent and all refuse to
+    guess at a project shape they do not recognise.
+13. Agents run this tool as often as people do, and usually keep only the end of
+    a build's output. So every command ends on its own: nothing an agent needs
+    may require a session that stays running, and `dev` is not the only way onto
+    a device. What a command concludes is available without reading a terminal:
+    `doctor --json` for prerequisites, `native/.rahti/build.json` for a build.
+    Report what this run produced and nothing older, and say what succeeded
+    badly — warnings are printed even when nothing blocks the build.
+14. `cargo-rahti-native` has no image dependency. `icon` writes SVG and lets
+    `cargo tauri icon` draw it.
 
 ## What lives in the framework, not here
 
