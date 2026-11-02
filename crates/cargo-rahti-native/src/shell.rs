@@ -187,6 +187,15 @@ fn main() {
         "cargo:rustc-env=RAHTI_NATIVE_ASSET_FINGERPRINT={:016x}",
         fingerprint(public)
     );
+
+    // Android devices with 16 KB memory pages need this library's segments
+    // aligned to match, and NDKs before r28 align them to 4 KB. A link argument
+    // here rather than a rustflag because Tauri sets the Android rustflags
+    // itself.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
+        println!("cargo:rustc-link-arg=-Wl,-z,max-page-size=16384");
+    }
+
     tauri_build::build()
 }
 

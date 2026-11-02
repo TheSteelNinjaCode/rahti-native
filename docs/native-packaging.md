@@ -58,6 +58,10 @@ Studio's bundled `jbr` can be newer than that. A `JAVA_HOME` that fits is always
 used. One that does not is passed over, for the build's process only, in favour
 of a suitable JDK already on the machine, and the build prints which.
 
+The generated `native/build.rs` links the Android library for 16 KB memory
+pages, which Google Play requires of current apps. A shell generated before this
+picks it up from `cargo rahti native init`, unless its `build.rs` was edited.
+
 ## The commands
 
 ```text

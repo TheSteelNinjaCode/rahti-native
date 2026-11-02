@@ -363,6 +363,22 @@ fn the_shell_reads_the_version_from_its_package_manifest() {
 }
 
 #[test]
+fn the_android_library_is_linked_for_16_kb_pages_and_only_on_android() {
+    let fixture = Fixture::new();
+    crate::init::run(&fixture.project(), &first_run()).expect("a first run");
+
+    let build = fixture.read("native/build.rs");
+    assert!(
+        build.contains("cargo:rustc-link-arg=-Wl,-z,max-page-size=16384"),
+        "{build}"
+    );
+    assert!(
+        build.contains(r#"var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android")"#),
+        "{build}"
+    );
+}
+
+#[test]
 fn the_shell_rebuilds_and_restages_changed_public_assets() {
     let fixture = Fixture::new();
     crate::init::run(&fixture.project(), &first_run()).expect("a first run");
