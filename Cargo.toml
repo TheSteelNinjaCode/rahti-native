@@ -20,7 +20,7 @@ members = ["crates/cargo-rahti-native", "crates/rahti-native"]
 # separate installs and a user upgrades them separately. Starting at 0.0.1
 # says what it is: a first cut of a thing that has not shipped yet.
 [workspace.package]
-version = "0.0.30"
+version = "0.0.31"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/TheSteelNinjaCode/rahti-native"
@@ -39,4 +39,4 @@ rahti = { version = "0.0.63", path = "../rahti/crates/rahti", default-features =
 
 # The runtime, for the CLI's dependency on it. Same version as the workspace
 # above, and bumped with it.
-rahti-native = { version = "0.0.30", path = "crates/rahti-native" }
+rahti-native = { version = "0.0.31", path = "crates/rahti-native" }
