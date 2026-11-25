@@ -155,10 +155,11 @@ fn the_adaptive_artwork_stays_inside_what_a_launcher_mask_shows() {
         svg.contains("href=\"data:image/svg+xml;base64,Zm9v\""),
         "{svg}"
     );
-    // Centred, and inside the 66dp of 108dp that every mask leaves visible.
-    assert!(svg.contains("width=\"573\""), "{svg}");
-    assert!(svg.contains("x=\"225\" y=\"225\""), "{svg}");
-    const { assert!(ADAPTIVE_ART_PERCENT * 108 <= 66 * 100) };
+    // Centred, and small enough that the square's corners stay inside the
+    // 66dp circle of 108dp that every mask, round ones included, leaves visible.
+    assert!(svg.contains("width=\"430\""), "{svg}");
+    assert!(svg.contains("x=\"297\" y=\"297\""), "{svg}");
+    const { assert!(ADAPTIVE_ART_PERCENT * 108 * 1_415 <= 66 * 100 * 1_000) };
 }
 
 #[test]
@@ -198,7 +199,9 @@ fn the_default_adaptive_layer_keeps_the_mark_inside_the_safe_zone() {
     // The bug this exists for: the embedded `ic_launcher_foreground` was drawn
     // edge to edge, and a launcher shows only the middle of the 108dp layer
     // through its mask — so the installed application's icon was cropped and
-    // looked off-centre. Everything outside the central 66dp has to be empty.
+    // looked off-centre. Then it was inset to the central 66dp *square*, and a
+    // round launcher still cut the mark's corners: the safe zone is a circle.
+    // Everything outside the 66dp circle has to be empty.
     let layers: Vec<_> = ANDROID
         .iter()
         .filter(|icon| icon.path.ends_with("ic_launcher_foreground.png"))
@@ -218,19 +221,19 @@ fn the_default_adaptive_layer_keeps_the_mark_inside_the_safe_zone() {
         );
 
         let (width, height) = (frame.width as usize, frame.height as usize);
-        // The 21dp ring outside the 66dp safe zone, in this density's pixels.
-        let margin = width * 21 / 108;
+        // Outside the 66dp circle every mask keeps, in this density's pixels.
+        let centre = width as f64 / 2.0;
+        let radius = width as f64 * 33.0 / 108.0;
         for y in 0..height {
             for x in 0..width {
-                let inside =
-                    x >= margin && x < width - margin && y >= margin && y < height - margin;
-                if inside {
+                let (dx, dy) = (x as f64 + 0.5 - centre, y as f64 + 0.5 - centre);
+                if dx * dx + dy * dy <= radius * radius {
                     continue;
                 }
                 let alpha = pixels[(y * width + x) * 4 + 3];
                 assert!(
                     alpha < 8,
-                    "{} draws at ({x}, {y}), outside the safe zone a launcher keeps",
+                    "{} draws at ({x}, {y}), outside the circle a round launcher keeps",
                     icon.path
                 );
             }

@@ -310,8 +310,9 @@ the tool does not recognise is reported with the code to add, not edited.
 
 The launcher icon has the same kind of trap: Android shows only the middle of
 the adaptive icon's 108dp layer through the launcher's mask. The default icons
-and everything `cargo rahti native icon` writes keep the mark inside that safe
-zone, so it is neither cropped nor off-centre.
+and everything `cargo rahti native icon` writes keep the whole image inside
+the 66dp circle every mask keeps, so even a round launcher neither crops nor
+shifts it.
 
 ### The database
 

@@ -169,11 +169,16 @@ pub fn is_placeholder(project: &Project) -> bool {
 
 /// How much of the 108dp adaptive layer the artwork's square covers.
 ///
-/// A launcher shows the central 72dp through a mask, and only the central 66dp
-/// is promised to survive every mask. That is 61% for artwork inside the circle
-/// its square encloses, and logos are rarely centred in their own square, so a
-/// little more margin keeps an off-centre tip inside a round mask too.
-const ADAPTIVE_ART_PERCENT: u32 = 56;
+/// A launcher shows the central 72dp through a mask, and only a *circle* 66dp
+/// across is promised to survive every mask — round launchers cut everything
+/// outside it. A square fits inside that circle only when its diagonal does:
+/// 66 / sqrt(2) = 46.7dp, 43% of the layer. Logos often reach the corners of
+/// their own square (a letterform's foot, a wordmark's last letter), so the
+/// square stays a little inside that, and the whole image survives every mask.
+///
+/// It was 56%, sized for the square safe zone, and a round launcher cropped
+/// the corners of a mark that filled its image.
+pub(crate) const ADAPTIVE_ART_PERCENT: u32 = 42;
 
 /// `cargo rahti native icon` — every launcher icon, from one image.
 ///
