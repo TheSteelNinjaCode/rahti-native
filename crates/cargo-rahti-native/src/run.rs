@@ -424,6 +424,7 @@ fn ensure_android_project(
     // time somebody deleted it.
     allow_loopback_cleartext(&generated)?;
     install_android_icons(project, &generated)?;
+    keep_clear_of_system_bars(&generated)?;
 
     // The configured key wins. A release without one signs with this
     // machine's key rather than coming out unsigned, which Android refuses to
@@ -942,6 +943,135 @@ pub(crate) fn unsigned_release(args: &Build, artifacts: &[PathBuf]) -> Option<do
             ),
         )
     })
+}
+
+/// Marks the insets code this tool adds to `MainActivity.kt`.
+const INSETS_MARKER: &str = "rahti-native: keep the page clear of the system bars";
+
+/// What goes into `onCreate`, after `super.onCreate`.
+const INSETS_CODE: &str = r#"    // rahti-native: keep the page clear of the system bars.
+    // Written by `cargo rahti native` on every Android build.
+    val content = findViewById<android.view.View>(android.R.id.content)
+    androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(content) { view, insets ->
+      val bars = insets.getInsets(
+        androidx.core.view.WindowInsetsCompat.Type.systemBars() or
+          androidx.core.view.WindowInsetsCompat.Type.displayCutout() or
+          androidx.core.view.WindowInsetsCompat.Type.ime()
+      )
+      view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+      androidx.core.view.WindowInsetsCompat.CONSUMED
+    }
+"#;
+
+/// Keep the WebView out from under the status bar, the navigation bar, a
+/// display cutout and the keyboard.
+///
+/// ## The bug this exists for
+///
+/// Tauri's generated `MainActivity` calls `enableEdgeToEdge()`, and Android 15
+/// enforces edge-to-edge for every application targeting API 35 or later
+/// anyway. So the WebView is laid out across the whole screen, and a page's
+/// header is drawn under the clock, the battery and the signal icons — where
+/// a tap reaches the status bar, not the page. A button in a sticky header
+/// looks fine and cannot be pressed.
+///
+/// A web page cannot fix it from CSS: Android System WebView does not report
+/// the status bar through `env(safe-area-inset-top)` to an ordinary page. So
+/// the activity pads its content view by the system bars' insets instead —
+/// the documented way to handle edge-to-edge — and the page gets exactly the
+/// area it can use, the keyboard included, which edge-to-edge also stopped
+/// `adjustResize` from doing.
+///
+/// Idempotent, and it refuses an activity it does not recognise rather than
+/// editing it by guesswork.
+pub(crate) fn keep_clear_of_system_bars(generated: &Path) -> Result<(), NativeError> {
+    let Some(path) = find_main_activity(&generated.join("app/src/main/java")) else {
+        return Err(NativeError::at(
+            "android",
+            generated,
+            "this Android project has no MainActivity.kt, so the page could not be kept \
+             clear of the status bar.\n  \
+             Delete native/gen/android to generate it again.",
+        ));
+    };
+    let source =
+        std::fs::read_to_string(&path).map_err(|e| NativeError::io("android", &path, e))?;
+
+    let Some(patched) = with_insets(&source) else {
+        return Err(NativeError::at(
+            "android",
+            &path,
+            format!(
+                "this MainActivity is not one `cargo rahti native` recognises, so the page was \
+                 not kept clear of the status bar and a header under it cannot be tapped.\n  \
+                 Add this to `onCreate`, after `super.onCreate(savedInstanceState)`:\n{INSETS_CODE}"
+            ),
+        ));
+    };
+
+    if patched != source {
+        std::fs::write(&path, patched).map_err(|e| NativeError::io("android", &path, e))?;
+        println!("  android: kept the page clear of the status and navigation bars");
+    }
+    Ok(())
+}
+
+/// `MainActivity.kt` with the insets code in it, or `None` for a shape this
+/// tool does not recognise. Idempotent.
+pub(crate) fn with_insets(source: &str) -> Option<String> {
+    if source.contains(INSETS_MARKER) {
+        return Some(source.to_string());
+    }
+    let crlf = source.contains("\r\n");
+    let text = source.replace("\r\n", "\n");
+
+    const SUPER: &str = "super.onCreate(savedInstanceState)\n";
+    let patched = if text.matches(SUPER).count() == 1 {
+        text.replacen(SUPER, &format!("{SUPER}{INSETS_CODE}"), 1)
+    } else if !text.contains("fun onCreate") {
+        // Older templates: a bare `class MainActivity : TauriActivity()`.
+        let class = text.lines().find(|line| {
+            line.trim_start()
+                .starts_with("class MainActivity : TauriActivity()")
+        })?;
+        let rest = class
+            .trim()
+            .trim_start_matches("class MainActivity : TauriActivity()")
+            .trim();
+        if !(rest.is_empty() || rest == "{}") {
+            return None;
+        }
+        let replacement = format!(
+            "class MainActivity : TauriActivity() {{\n  \
+             override fun onCreate(savedInstanceState: android.os.Bundle?) {{\n    \
+             {SUPER}{INSETS_CODE}  }}\n}}"
+        );
+        text.replacen(class, &replacement, 1)
+    } else {
+        return None;
+    };
+
+    Some(if crlf {
+        patched.replace('\n', "\r\n")
+    } else {
+        patched
+    })
+}
+
+/// The one `MainActivity.kt` under `java/`, wherever the identifier put it.
+fn find_main_activity(java: &Path) -> Option<PathBuf> {
+    let mut found: Vec<PathBuf> = walk(java)
+        .ok()?
+        .into_iter()
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name == "MainActivity.kt")
+        })
+        // Tauri's own generated sources live under `generated/` and are not
+        // the application's activity.
+        .filter(|path| !path.components().any(|c| c.as_os_str() == "generated"))
+        .collect();
+    (found.len() == 1).then(|| found.remove(0))
 }
 
 /// The file Android reads to decide whether cleartext HTTP is allowed.

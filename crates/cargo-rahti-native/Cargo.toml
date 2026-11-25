@@ -27,3 +27,9 @@ getrandom = "0.3"
 # No Tauri dependency, deliberately. Packaging is delegated to `cargo tauri`,
 # which has to match the `tauri` version in the application's own
 # native/Cargo.toml — see the note in src/doctor.rs.
+
+# Tests only: decoding the embedded launcher icons to prove their adaptive
+# layer leaves the safe-zone margin empty. The tool itself still has no image
+# dependency.
+[dev-dependencies]
+png = "0.18"

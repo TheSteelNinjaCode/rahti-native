@@ -293,6 +293,26 @@ than flipping the manifest flag, which would have permitted it everywhere.
 It is reapplied on every Android build, because `gen/android` is regenerated
 rather than reviewed.
 
+### Android and the status bar
+
+Android 15 draws every application targeting API 35 or later edge to edge,
+and Tauri's generated activity asks for it as well, so a WebView left alone
+sits under the status bar: a page's header lands beside the clock and the
+battery, and a tap there reaches the system, not the page. Android System
+WebView does not report that area to an ordinary page through
+`env(safe-area-inset-top)`, so CSS cannot fix it.
+
+Every Android build therefore pads the activity's content by the system bars,
+the display cutout and the keyboard, in `MainActivity.kt` inside the generated
+project. The page gets exactly the area it can use, and a form field the
+keyboard would cover scrolls into view as it does in a browser. An activity
+the tool does not recognise is reported with the code to add, not edited.
+
+The launcher icon has the same kind of trap: Android shows only the middle of
+the adaptive icon's 108dp layer through the launcher's mask. The default icons
+and everything `cargo rahti native icon` writes keep the mark inside that safe
+zone, so it is neither cropped nor off-centre.
+
 ### The database
 
 `database.mode` decides, and the default is `sqlite-local`: a SQLite file in

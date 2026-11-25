@@ -192,3 +192,48 @@ fn the_framework_mark_is_recognised_and_a_replacement_is_not() {
     let project = project_with_icon("replaced", b"somebody's logo");
     assert!(!is_placeholder(&project));
 }
+
+#[test]
+fn the_default_adaptive_layer_keeps_the_mark_inside_the_safe_zone() {
+    // The bug this exists for: the embedded `ic_launcher_foreground` was drawn
+    // edge to edge, and a launcher shows only the middle of the 108dp layer
+    // through its mask — so the installed application's icon was cropped and
+    // looked off-centre. Everything outside the central 66dp has to be empty.
+    let layers: Vec<_> = ANDROID
+        .iter()
+        .filter(|icon| icon.path.ends_with("ic_launcher_foreground.png"))
+        .collect();
+    assert_eq!(layers.len(), 5, "one adaptive layer per density");
+
+    for icon in layers {
+        let decoder = png::Decoder::new(std::io::Cursor::new(icon.bytes));
+        let mut reader = decoder.read_info().expect(icon.path);
+        let mut pixels = vec![0; reader.output_buffer_size().expect(icon.path)];
+        let frame = reader.next_frame(&mut pixels).expect(icon.path);
+        assert_eq!(
+            frame.color_type,
+            png::ColorType::Rgba,
+            "{} has no alpha",
+            icon.path
+        );
+
+        let (width, height) = (frame.width as usize, frame.height as usize);
+        // The 21dp ring outside the 66dp safe zone, in this density's pixels.
+        let margin = width * 21 / 108;
+        for y in 0..height {
+            for x in 0..width {
+                let inside =
+                    x >= margin && x < width - margin && y >= margin && y < height - margin;
+                if inside {
+                    continue;
+                }
+                let alpha = pixels[(y * width + x) * 4 + 3];
+                assert!(
+                    alpha < 8,
+                    "{} draws at ({x}, {y}), outside the safe zone a launcher keeps",
+                    icon.path
+                );
+            }
+        }
+    }
+}

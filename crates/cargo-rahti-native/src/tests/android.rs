@@ -710,3 +710,113 @@ fn a_strings_file_this_tool_does_not_recognise_is_reported() {
     let error = crate::run::sync_android_name(&root, "ilnaya").expect_err("no anchor");
     assert!(error.to_string().contains("app_name"), "{error}");
 }
+
+// ---------------------------------------------------------- system bars
+
+/// Tauri 2's generated `MainActivity.kt`.
+const TAURI_ACTIVITY: &str = "package com.example.app
+
+import android.os.Bundle
+import androidx.activity.enableEdgeToEdge
+
+class MainActivity : TauriActivity() {
+  override fun onCreate(savedInstanceState: Bundle?) {
+    enableEdgeToEdge()
+    super.onCreate(savedInstanceState)
+  }
+}
+";
+
+#[test]
+fn the_page_is_kept_clear_of_the_status_bar() {
+    // The bug this exists for: `enableEdgeToEdge()`, which Android 15 enforces
+    // for API 35+ anyway, lays the WebView out under the status bar, so a
+    // page's header sat under the clock and battery and could not be tapped.
+    let patched = crate::run::with_insets(TAURI_ACTIVITY).expect("a recognised activity");
+
+    assert!(
+        patched.contains("setOnApplyWindowInsetsListener"),
+        "{patched}"
+    );
+    for kind in ["systemBars()", "displayCutout()", "ime()"] {
+        assert!(
+            patched.contains(kind),
+            "{kind} is not kept clear: {patched}"
+        );
+    }
+    // After `super.onCreate`, where the content view exists.
+    let super_at = patched.find("super.onCreate(savedInstanceState)").unwrap();
+    let listener_at = patched.find("setOnApplyWindowInsetsListener").unwrap();
+    assert!(listener_at > super_at, "{patched}");
+    assert_eq!(patched.matches("override fun onCreate").count(), 1);
+}
+
+#[test]
+fn the_insets_patch_applies_once() {
+    let once = crate::run::with_insets(TAURI_ACTIVITY).unwrap();
+    let twice = crate::run::with_insets(&once).unwrap();
+    assert_eq!(once, twice);
+}
+
+#[test]
+fn an_older_activity_without_on_create_gets_one() {
+    let old = "package com.example.app\n\nclass MainActivity : TauriActivity()\n";
+    let patched = crate::run::with_insets(old).expect("a recognised activity");
+    assert!(patched.contains("override fun onCreate"), "{patched}");
+    assert!(
+        patched.contains("super.onCreate(savedInstanceState)"),
+        "{patched}"
+    );
+    assert!(
+        patched.contains("setOnApplyWindowInsetsListener"),
+        "{patched}"
+    );
+}
+
+#[test]
+fn an_activity_with_windows_line_endings_keeps_them() {
+    let crlf = TAURI_ACTIVITY.replace('\n', "\r\n");
+    let patched = crate::run::with_insets(&crlf).expect("a recognised activity");
+    assert!(patched.contains("setOnApplyWindowInsetsListener"));
+    assert!(
+        !patched.replace("\r\n", "").contains('\n'),
+        "line endings were mixed"
+    );
+}
+
+#[test]
+fn an_activity_it_does_not_recognise_is_reported_not_edited() {
+    let custom = "class MainActivity : TauriActivity() {\n  override fun onCreate(b: Bundle?) {\n    super.onCreate(b)\n  }\n}\n";
+    assert!(crate::run::with_insets(custom).is_none());
+
+    let root = generated("insets-unknown", TAURI_MANIFEST);
+    let dir = root.join("app/src/main/java/com/example/app");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("MainActivity.kt"), custom).unwrap();
+
+    let error = crate::run::keep_clear_of_system_bars(&root).expect_err("unrecognised");
+    assert!(error.to_string().contains("status bar"), "{error}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("MainActivity.kt")).unwrap(),
+        custom
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn the_activity_is_found_under_its_identifier_and_patched_on_disk() {
+    let root = generated("insets-disk", TAURI_MANIFEST);
+    let dir = root.join("app/src/main/java/com/example/app");
+    std::fs::create_dir_all(dir.join("generated")).unwrap();
+    std::fs::write(dir.join("MainActivity.kt"), TAURI_ACTIVITY).unwrap();
+
+    crate::run::keep_clear_of_system_bars(&root).expect("patched");
+    let written = std::fs::read_to_string(dir.join("MainActivity.kt")).unwrap();
+    assert!(
+        written.contains("setOnApplyWindowInsetsListener"),
+        "{written}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
