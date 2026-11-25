@@ -476,11 +476,15 @@ fn android(project: &Project, config: &NativeConfig, release: bool) -> Vec<Findi
     }
 
     if release {
-        findings.push(match std::env::var("RAHTI_NATIVE_ANDROID_KEYSTORE") {
-            Ok(value) if !value.trim().is_empty() => {
-                Finding::ok("release signing", "RAHTI_NATIVE_ANDROID_KEYSTORE is set")
-            }
-            _ => Finding::warning(
+        // The same check the build makes, so a key that cannot sign is found
+        // here and not after every ABI has compiled.
+        findings.push(match crate::run::signing_key() {
+            Ok(Some(_)) => Finding::ok(
+                "release signing",
+                "RAHTI_NATIVE_ANDROID_KEYSTORE names a keystore, with its password and alias",
+            ),
+            Err(error) => Finding::missing("release signing", error.to_string()),
+            Ok(None) => Finding::warning(
                 "release signing",
                 "No keystore is configured. An unsigned release AAB is refused by Google Play\n   \
                  and an unsigned release APK will not install.\n   \

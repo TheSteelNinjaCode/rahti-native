@@ -520,6 +520,21 @@ This matters because the failure is silent: passing a keystore and assuming
 Tauri picks it up produces a release that builds fine and is **unsigned**,
 which Google Play refuses and which will not install.
 
+A few things follow from that file being a Java properties file and from the
+build owning it:
+
+- Every value is escaped, so a password may contain `\`, `#`, `=`, `:`, `!`,
+  spaces or non-ASCII characters and still reaches Gradle as written.
+- A relative `RAHTI_NATIVE_ANDROID_KEYSTORE` is resolved against the directory
+  the build runs from, and a keystore that is not there, or a missing password
+  or alias, stops the build before anything compiles. `doctor --release` makes
+  the same check.
+- A build without the variables removes the file, so neither an earlier key nor
+  its passwords outlive the variables that supplied them, and the Gradle
+  signing configuration only applies when the file names a key.
+- A release that comes out unsigned anyway is reported as a warning, in the
+  output and in `native/.rahti/build.json`.
+
 ## Shutdown
 
 The host owns it. Ctrl+C is not involved: a packaged GUI never receives one and

@@ -207,6 +207,11 @@ pub fn build(project: &Project, config: &NativeConfig, args: &Build) -> Result<(
     execute(command, "build")?;
 
     let artifacts = report_artifacts(project, args, abi, format, started);
+    if let Some(finding) = unsigned_release(args, &artifacts) {
+        println!();
+        doctor::report(std::slice::from_ref(&finding));
+        warnings.push(finding);
+    }
 
     let installed = match &args.device {
         Some(device) => {
@@ -574,63 +579,79 @@ fn walk(dir: &Path) -> Result<Vec<PathBuf>, NativeError> {
 /// named there. They are never written to `rahti.native.json`, never to
 /// `tauri.conf.json`, and never printed.
 ///
-/// With nothing configured this does nothing, and a `--debug` build is signed
-/// with Android's debug key as usual.
+/// With nothing configured, a `--debug` build is signed with Android's debug
+/// key as usual and a release build is unsigned — and a `keystore.properties`
+/// an earlier signed build left behind is removed, so that neither a stale key
+/// nor its passwords outlive the variables that supplied them.
 pub(crate) fn configure_signing(generated: &Path) -> Result<(), NativeError> {
-    let Some(keystore) = env_value("RAHTI_NATIVE_ANDROID_KEYSTORE") else {
+    let properties_path = generated.join("keystore.properties");
+
+    let Some(key) = signing_key()? else {
+        if properties_path.exists() {
+            std::fs::remove_file(&properties_path)
+                .map_err(|e| NativeError::io("android", &properties_path, e))?;
+        }
         return Ok(());
     };
 
-    let store_password = env_value("RAHTI_NATIVE_ANDROID_KEYSTORE_PASSWORD").unwrap_or_default();
-    let alias = env_value("RAHTI_NATIVE_ANDROID_KEY_ALIAS").unwrap_or_default();
-    let key_password =
-        env_value("RAHTI_NATIVE_ANDROID_KEY_PASSWORD").unwrap_or_else(|| store_password.clone());
-
-    if store_password.is_empty() || alias.is_empty() {
-        return Err(NativeError::new(
-            "android",
-            "RAHTI_NATIVE_ANDROID_KEYSTORE is set, but the keystore password or the key alias              is not.
-               All of RAHTI_NATIVE_ANDROID_KEYSTORE,              RAHTI_NATIVE_ANDROID_KEYSTORE_PASSWORD and RAHTI_NATIVE_ANDROID_KEY_ALIAS are              needed to sign a release; a half-configured key produces an unsigned package              that Google Play refuses.",
-        ));
-    }
-
-    // Gradle reads this as a Java properties file, where a backslash escapes —
-    // so a Windows path is written with forward slashes.
-    let properties = format!(
-        "storeFile={}\nstorePassword={}\nkeyAlias={}\npassword={}\n",
-        keystore.replace('\\', "/"),
-        store_password,
-        alias,
-        key_password
-    );
-    let properties_path = generated.join("keystore.properties");
-    std::fs::write(&properties_path, properties)
+    std::fs::write(&properties_path, key.properties())
         .map_err(|e| NativeError::io("android", &properties_path, e))?;
 
     let gradle_path = generated.join("app/build.gradle.kts");
     let gradle = std::fs::read_to_string(&gradle_path)
         .map_err(|e| NativeError::io("android", &gradle_path, e))?;
 
-    if gradle.contains("rahtiKeystore") {
-        return Ok(());
-    }
-
-    const CONFIG_ANCHOR: &str = "    buildTypes {";
-    const RELEASE_ANCHOR: &str = "        getByName(\"release\") {";
-    const APPLY_SIGNING: &str = "            signingConfig = signingConfigs.getByName(\"release\")";
-
-    if !gradle.contains(CONFIG_ANCHOR) || !gradle.contains(RELEASE_ANCHOR) {
+    let Some(patched) = with_signing(&gradle) else {
         return Err(NativeError::at(
             "android",
             &gradle_path,
             "this Gradle file is not one `cargo rahti native` recognises, so release signing \
              was not wired in.\n  \
-             Add a `signingConfigs` block reading keystore.properties by hand, or the release \
-             package will be unsigned.",
+             Add a `signingConfigs` block reading keystore.properties by hand, or delete \
+             native/gen/android to generate it again; otherwise the release package will be \
+             unsigned.",
         ));
-    }
+    };
 
-    let signing = r#"    val rahtiKeystore = Properties().apply {
+    if patched != gradle {
+        std::fs::write(&gradle_path, patched)
+            .map_err(|e| NativeError::io("android", &gradle_path, e))?;
+        println!("  android: release signing wired in from RAHTI_NATIVE_ANDROID_*");
+    }
+    Ok(())
+}
+
+/// Where the patch puts the signing configuration, and where it applies it.
+const CONFIG_ANCHOR: &str = "    buildTypes {";
+const RELEASE_ANCHOR: &str = "        getByName(\"release\") {";
+
+/// The signing configuration the patch writes.
+///
+/// Created only when `keystore.properties` names a key. The file is removed
+/// whenever the variables are not set, and a Gradle file that demanded it —
+/// `rahtiKeystore["keyAlias"] as String` — failed at configuration time, which
+/// is before *any* task, so a debug build broke too.
+const SIGNING_CONFIG: &str = r#"    val rahtiKeystore = Properties().apply {
+        val f = rootProject.file("keystore.properties")
+        if (f.exists()) { f.inputStream().use { load(it) } }
+    }
+    signingConfigs {
+        if (rahtiKeystore.getProperty("storeFile") != null) {
+            create("release") {
+                keyAlias = rahtiKeystore.getProperty("keyAlias")
+                keyPassword = rahtiKeystore.getProperty("password")
+                storeFile = file(rahtiKeystore.getProperty("storeFile"))
+                storePassword = rahtiKeystore.getProperty("storePassword")
+            }
+        }
+    }
+"#;
+const APPLY_SIGNING: &str =
+    "            signingConfigs.findByName(\"release\")?.let { signingConfig = it }";
+
+/// What versions before the conditional configuration wrote, replaced in place
+/// so that a project patched by one of them is upgraded rather than skipped.
+const LEGACY_SIGNING_CONFIG: &str = r#"    val rahtiKeystore = Properties().apply {
         val f = rootProject.file("keystore.properties")
         if (f.exists()) { f.inputStream().use { load(it) } }
     }
@@ -643,30 +664,203 @@ pub(crate) fn configure_signing(generated: &Path) -> Result<(), NativeError> {
         }
     }
 "#;
+const LEGACY_APPLY_SIGNING: &str =
+    "            signingConfig = signingConfigs.getByName(\"release\")";
 
-    let patched = gradle
-        .replacen(CONFIG_ANCHOR, &format!("{signing}{CONFIG_ANCHOR}"), 1)
+/// `gradle` with release signing wired in, or `None` if its shape is not one
+/// this tool recognises. Idempotent.
+pub(crate) fn with_signing(gradle: &str) -> Option<String> {
+    // Gradle files written on Windows may carry CRLF line endings, and the
+    // anchors are written with LF.
+    let crlf = gradle.contains("\r\n");
+    let text = gradle.replace("\r\n", "\n");
+
+    let text = if text.contains(LEGACY_SIGNING_CONFIG) {
+        text.replacen(LEGACY_SIGNING_CONFIG, SIGNING_CONFIG, 1)
+            .replacen(LEGACY_APPLY_SIGNING, APPLY_SIGNING, 1)
+    } else if text.contains(SIGNING_CONFIG) {
+        text
+    } else if text.contains("rahtiKeystore") {
+        // Somebody's own edit of an earlier patch: theirs to keep.
+        return None;
+    } else {
+        if !text.contains(CONFIG_ANCHOR) || !text.contains(RELEASE_ANCHOR) {
+            return None;
+        }
+        text.replacen(
+            CONFIG_ANCHOR,
+            &format!("{SIGNING_CONFIG}{CONFIG_ANCHOR}"),
+            1,
+        )
         .replacen(
             RELEASE_ANCHOR,
-            &format!(
-                "{RELEASE_ANCHOR}
-{APPLY_SIGNING}"
-            ),
+            &format!("{RELEASE_ANCHOR}\n{APPLY_SIGNING}"),
             1,
-        );
+        )
+    };
 
-    std::fs::write(&gradle_path, patched)
-        .map_err(|e| NativeError::io("android", &gradle_path, e))?;
-
-    println!("  android: release signing wired in from RAHTI_NATIVE_ANDROID_*");
-    Ok(())
+    Some(if crlf {
+        text.replace('\n', "\r\n")
+    } else {
+        text
+    })
 }
 
-/// A variable's value, with blank counted as unset.
+/// A release signing key, from the `RAHTI_NATIVE_ANDROID_*` variables.
+pub(crate) struct SigningKey {
+    keystore: PathBuf,
+    store_password: String,
+    alias: String,
+    key_password: String,
+}
+
+impl SigningKey {
+    /// `keystore.properties`, which Gradle reads as a Java properties file.
+    ///
+    /// Every value is escaped: in that format a backslash starts an escape,
+    /// `#` and `!` start a comment at the start of a line, `=` and `:` end a
+    /// key, and the file is read as ISO-8859-1. A password with any of those in
+    /// it, written as it was, reached Gradle as a different password, and the
+    /// build failed with "keystore password was incorrect" for a password that
+    /// was not.
+    pub(crate) fn properties(&self) -> String {
+        // Forward slashes, which Gradle accepts on Windows, keep the path
+        // readable; the escaping would handle backslashes as well.
+        let store_file = self.keystore.display().to_string().replace('\\', "/");
+        format!(
+            "storeFile={}\nstorePassword={}\nkeyAlias={}\npassword={}\n",
+            escape_property(&store_file),
+            escape_property(&self.store_password),
+            escape_property(&self.alias),
+            escape_property(&self.key_password),
+        )
+    }
+}
+
+/// The configured release key, `None` when none is configured, or why the
+/// configuration cannot sign anything.
+///
+/// Checked here, before the build, rather than left to Gradle: a keystore that
+/// does not exist or a missing alias otherwise costs a full compile of every
+/// ABI before Gradle says so, and a relative path was resolved by Gradle
+/// against `gen/android/app` rather than the directory the build ran from.
+pub(crate) fn signing_key() -> Result<Option<SigningKey>, NativeError> {
+    let Some(keystore) = env_value("RAHTI_NATIVE_ANDROID_KEYSTORE") else {
+        return Ok(None);
+    };
+
+    // Passwords as they were given: a space is a character a password may
+    // have, so only an entirely blank one counts as unset.
+    let store_password = env_secret("RAHTI_NATIVE_ANDROID_KEYSTORE_PASSWORD");
+    let alias = env_value("RAHTI_NATIVE_ANDROID_KEY_ALIAS");
+    let (Some(store_password), Some(alias)) = (store_password, alias) else {
+        return Err(NativeError::new(
+            "android",
+            "RAHTI_NATIVE_ANDROID_KEYSTORE is set, but the keystore password or the key alias \
+             is not.\n  \
+             RAHTI_NATIVE_ANDROID_KEYSTORE, RAHTI_NATIVE_ANDROID_KEYSTORE_PASSWORD and \
+             RAHTI_NATIVE_ANDROID_KEY_ALIAS are all needed to sign a release \
+             (RAHTI_NATIVE_ANDROID_KEY_PASSWORD too, when the key's password differs from the \
+             keystore's); a half-configured key produces an unsigned package that does not \
+             install.",
+        ));
+    };
+    let key_password =
+        env_secret("RAHTI_NATIVE_ANDROID_KEY_PASSWORD").unwrap_or_else(|| store_password.clone());
+
+    let keystore = PathBuf::from(keystore);
+    let keystore = if keystore.is_absolute() {
+        keystore
+    } else {
+        std::env::current_dir()
+            .map(|dir| dir.join(&keystore))
+            .unwrap_or(keystore)
+    };
+    if !keystore.is_file() {
+        return Err(NativeError::at(
+            "android",
+            &keystore,
+            "RAHTI_NATIVE_ANDROID_KEYSTORE names no keystore file.\n  \
+             Point it at the .jks or .keystore file that holds the release key.",
+        ));
+    }
+
+    Ok(Some(SigningKey {
+        keystore,
+        store_password,
+        alias,
+        key_password,
+    }))
+}
+
+/// One value escaped for a Java properties file. See [`SigningKey::properties`].
+pub(crate) fn escape_property(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for (index, c) in value.chars().enumerate() {
+        match c {
+            '\\' => escaped.push_str("\\\\"),
+            '=' | ':' | '#' | '!' => {
+                escaped.push('\\');
+                escaped.push(c);
+            }
+            // Leading whitespace is skipped by the reader unless escaped.
+            ' ' if index == 0 => escaped.push_str("\\ "),
+            '\t' => escaped.push_str("\\t"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\u{0c}' => escaped.push_str("\\f"),
+            ' '..='~' => escaped.push(c),
+            _ => {
+                let mut units = [0u16; 2];
+                for unit in c.encode_utf16(&mut units) {
+                    escaped.push_str(&format!("\\u{unit:04X}"));
+                }
+            }
+        }
+    }
+    escaped
+}
+
+/// A variable's value, trimmed, with blank counted as unset.
 fn env_value(name: &str) -> Option<String> {
     let value = std::env::var(name).ok()?;
     let value = value.trim().to_string();
     (!value.is_empty()).then_some(value)
+}
+
+/// A secret's value exactly as given, with blank counted as unset.
+fn env_secret(name: &str) -> Option<String> {
+    let value = std::env::var(name).ok()?;
+    (!value.trim().is_empty()).then_some(value)
+}
+
+/// A release that came out unsigned, said rather than left in a file name.
+///
+/// Gradle names an APK it could not sign `…-unsigned.apk` and reports success,
+/// and Android refuses to install one. A build that produced only that has
+/// succeeded badly, and the report says so.
+pub(crate) fn unsigned_release(args: &Build, artifacts: &[PathBuf]) -> Option<doctor::Finding> {
+    if args.debug || args.target != Platform::Android {
+        return None;
+    }
+    let unsigned: Vec<String> = artifacts
+        .iter()
+        .filter_map(|path| path.file_name()?.to_str())
+        .filter(|name| name.contains("-unsigned"))
+        .map(str::to_string)
+        .collect();
+    (!unsigned.is_empty()).then(|| {
+        doctor::Finding::warning(
+            "release signing",
+            format!(
+                "{} is unsigned, and Android will not install it.\n   \
+                 Set RAHTI_NATIVE_ANDROID_KEYSTORE, RAHTI_NATIVE_ANDROID_KEYSTORE_PASSWORD and\n   \
+                 RAHTI_NATIVE_ANDROID_KEY_ALIAS in the environment of the build, or build with\n   \
+                 `--debug` for a package that installs on your own devices.",
+                unsigned.join(", ")
+            ),
+        )
+    })
 }
 
 /// The file Android reads to decide whether cleartext HTTP is allowed.

@@ -165,18 +165,23 @@ const SIGNING_VARS: [&str; 4] = [
 ];
 
 impl Signing {
-    /// All four set, for a fully configured key.
-    fn set(keystore: &str) -> Self {
+    /// All four set, for a fully configured key with these passwords.
+    fn with(keystore: &std::path::Path, store_password: &str, key_password: &str) -> Self {
         let held = Signing::none();
         // SAFETY: `held` owns the lock, which is this binary's whole access
         // to these four, and holds it until it drops.
         unsafe {
             std::env::set_var("RAHTI_NATIVE_ANDROID_KEYSTORE", keystore);
-            std::env::set_var("RAHTI_NATIVE_ANDROID_KEYSTORE_PASSWORD", "storepass");
+            std::env::set_var("RAHTI_NATIVE_ANDROID_KEYSTORE_PASSWORD", store_password);
             std::env::set_var("RAHTI_NATIVE_ANDROID_KEY_ALIAS", "release");
-            std::env::set_var("RAHTI_NATIVE_ANDROID_KEY_PASSWORD", "keypass");
+            std::env::set_var("RAHTI_NATIVE_ANDROID_KEY_PASSWORD", key_password);
         }
         held
+    }
+
+    /// A key that exists, at `root/keys/release.jks`.
+    fn set(root: &std::path::Path) -> Self {
+        Signing::with(&keystore_in(root), "storepass", "keypass")
     }
 
     /// The lock, with none of the four set.
@@ -203,10 +208,72 @@ impl Drop for Signing {
     }
 }
 
+/// A keystore file that exists. Its contents are Gradle's business, not ours.
+fn keystore_in(root: &std::path::Path) -> std::path::PathBuf {
+    let keystore = root.join("keys").join("release.jks");
+    std::fs::create_dir_all(keystore.parent().unwrap()).unwrap();
+    std::fs::write(&keystore, b"a keystore").unwrap();
+    keystore
+}
+
 fn with_gradle(label: &str) -> std::path::PathBuf {
     let root = generated(label, TAURI_MANIFEST);
     std::fs::write(root.join("app/build.gradle.kts"), TAURI_GRADLE).unwrap();
     root
+}
+
+fn gradle_of(root: &std::path::Path) -> String {
+    std::fs::read_to_string(root.join("app/build.gradle.kts")).unwrap()
+}
+
+/// A Java properties file read the way `java.util.Properties.load` reads one,
+/// for the escapes this tool writes: enough to prove a value survives.
+fn read_properties(text: &str) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    for line in text.lines() {
+        let mut key = String::new();
+        let mut value = String::new();
+        let mut in_value = false;
+        let mut chars = line.chars();
+        while let Some(c) = chars.next() {
+            let decoded = if c == '\\' {
+                match chars.next() {
+                    Some('t') => '\t',
+                    Some('n') => '\n',
+                    Some('r') => '\r',
+                    Some('f') => '\u{0c}',
+                    Some('u') => {
+                        let hex: String = (0..4).filter_map(|_| chars.next()).collect();
+                        let unit = u16::from_str_radix(&hex, 16).unwrap();
+                        // A surrogate pair is two `\u` escapes in a row.
+                        if (0xD800..0xDC00).contains(&unit) {
+                            assert_eq!(chars.next(), Some('\\'));
+                            assert_eq!(chars.next(), Some('u'));
+                            let hex: String = (0..4).filter_map(|_| chars.next()).collect();
+                            let low = u16::from_str_radix(&hex, 16).unwrap();
+                            char::decode_utf16([unit, low]).next().unwrap().unwrap()
+                        } else {
+                            char::from_u32(unit as u32).unwrap()
+                        }
+                    }
+                    Some(other) => other,
+                    None => break,
+                }
+            } else if c == '=' && !in_value {
+                in_value = true;
+                continue;
+            } else {
+                c
+            };
+            if in_value {
+                value.push(decoded);
+            } else {
+                key.push(decoded);
+            }
+        }
+        map.insert(key, value);
+    }
+    map
 }
 
 #[test]
@@ -216,20 +283,20 @@ fn a_release_key_reaches_the_gradle_project() {
     // build succeeds with an *unsigned* release — which Google Play refuses
     // and which will not install.
     let root = with_gradle("signing");
-    let _signing = Signing::set("C:\\keys\\release.jks");
+    let _signing = Signing::set(&root);
 
     crate::run::configure_signing(&root).expect("the signing patch applies");
 
-    let gradle = std::fs::read_to_string(root.join("app/build.gradle.kts")).unwrap();
+    let gradle = gradle_of(&root);
     assert!(gradle.contains("signingConfigs {"), "{gradle}");
     assert!(
-        gradle.contains("signingConfig = signingConfigs.getByName(\"release\")"),
+        gradle.contains("signingConfigs.findByName(\"release\")?.let { signingConfig = it }"),
         "{gradle}"
     );
     // On the release build type, and not on debug — a debug build is signed
     // with Android's own key and must not need this one.
     let release_at = gradle.find("getByName(\"release\")").unwrap();
-    let applied_at = gradle.find("signingConfig = signingConfigs").unwrap();
+    let applied_at = gradle.find("signingConfig = it").unwrap();
     assert!(applied_at > release_at, "{gradle}");
 
     let _ = std::fs::remove_dir_all(&root);
@@ -238,7 +305,7 @@ fn a_release_key_reaches_the_gradle_project() {
 #[test]
 fn the_key_details_go_only_to_the_ignored_properties_file() {
     let root = with_gradle("signing-secrets");
-    let _signing = Signing::set("C:\\keys\\release.jks");
+    let _signing = Signing::set(&root);
 
     crate::run::configure_signing(&root).expect("the signing patch applies");
 
@@ -249,15 +316,14 @@ fn the_key_details_go_only_to_the_ignored_properties_file() {
         properties.contains("storePassword=storepass"),
         "{properties}"
     );
-    // A Windows path is written with forward slashes: Gradle reads this as a
-    // Java properties file, where a backslash escapes the next character.
-    assert!(
-        properties.contains("storeFile=C:/keys/release.jks"),
-        "{properties}"
-    );
+    // A Windows path is written with forward slashes and its drive colon
+    // escaped: Gradle reads this as a Java properties file.
+    let store_file = read_properties(&properties)["storeFile"].clone();
+    assert!(!store_file.contains('\\'), "{properties}");
+    assert!(store_file.ends_with("keys/release.jks"), "{properties}");
 
     // And nowhere else.
-    let gradle = std::fs::read_to_string(root.join("app/build.gradle.kts")).unwrap();
+    let gradle = gradle_of(&root);
     for secret in ["storepass", "keypass", "release.jks"] {
         assert!(
             !gradle.contains(secret),
@@ -269,14 +335,42 @@ fn the_key_details_go_only_to_the_ignored_properties_file() {
 }
 
 #[test]
+fn a_password_with_properties_syntax_in_it_reaches_gradle_unchanged() {
+    // The bug this exists for: the passwords were written into
+    // keystore.properties as they were, and that file is a Java properties
+    // file — a backslash escapes, `=` and `:` end a key, `#` and `!` start a
+    // comment, and it is read as ISO-8859-1. A password such as `Test#pass\1=x`
+    // reached Gradle as `Test#pass1=x`, and the build stopped at packaging with
+    // "keystore password was incorrect".
+    let root = with_gradle("signing-escapes");
+    let store_password = r"Test#pass\1=x:!";
+    let key_password = " lead and ñ and 🔑\ttab";
+    let _signing = Signing::with(&keystore_in(&root), store_password, key_password);
+
+    crate::run::configure_signing(&root).expect("the signing patch applies");
+
+    let text = std::fs::read_to_string(root.join("keystore.properties")).unwrap();
+    assert!(
+        text.is_ascii(),
+        "read as ISO-8859-1, so it has to be ASCII: {text}"
+    );
+    let read = read_properties(&text);
+    assert_eq!(read["storePassword"], store_password, "{text}");
+    assert_eq!(read["password"], key_password, "{text}");
+    assert_eq!(read["keyAlias"], "release", "{text}");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn applying_the_signing_patch_twice_wires_it_once() {
     let root = with_gradle("signing-twice");
-    let _signing = Signing::set("C:\\keys\\release.jks");
+    let _signing = Signing::set(&root);
 
     crate::run::configure_signing(&root).expect("a first run");
-    let once = std::fs::read_to_string(root.join("app/build.gradle.kts")).unwrap();
+    let once = gradle_of(&root);
     crate::run::configure_signing(&root).expect("a second run");
-    let twice = std::fs::read_to_string(root.join("app/build.gradle.kts")).unwrap();
+    let twice = gradle_of(&root);
 
     assert_eq!(once, twice);
     assert_eq!(once.matches("signingConfigs {").count(), 1);
@@ -292,11 +386,102 @@ fn no_keystore_configured_changes_nothing() {
 
     crate::run::configure_signing(&root).expect("nothing to do");
 
-    assert_eq!(
-        std::fs::read_to_string(root.join("app/build.gradle.kts")).unwrap(),
-        TAURI_GRADLE
-    );
+    assert_eq!(gradle_of(&root), TAURI_GRADLE);
     assert!(!root.join("keystore.properties").exists());
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_key_from_an_earlier_build_does_not_outlive_its_variables() {
+    // The bug this exists for: keystore.properties stayed after the variables
+    // were gone, so the next release was signed with whatever key an earlier
+    // build had used, and that key's passwords stayed on disk indefinitely.
+    let root = with_gradle("signing-stale");
+    {
+        let _signing = Signing::set(&root);
+        crate::run::configure_signing(&root).expect("a signed build");
+    }
+    assert!(root.join("keystore.properties").exists());
+
+    let _signing = Signing::none();
+    crate::run::configure_signing(&root).expect("an unsigned build");
+    assert!(!root.join("keystore.properties").exists());
+
+    // And a Gradle file without the properties file still configures: the
+    // signing configuration is conditional, so a debug build is not broken by
+    // a release key that is not there.
+    let gradle = gradle_of(&root);
+    assert!(
+        gradle.contains("if (rahtiKeystore.getProperty(\"storeFile\") != null)"),
+        "{gradle}"
+    );
+    assert!(!gradle.contains("as String"), "{gradle}");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_project_patched_by_an_earlier_version_is_upgraded() {
+    // A Gradle file the unconditional patch wrote: `rahtiKeystore["keyAlias"]
+    // as String` throws at configuration time when the file is absent, before
+    // any task, so every build of that project failed — debug included.
+    let legacy = TAURI_GRADLE
+        .replacen(
+            "    buildTypes {",
+            r#"    val rahtiKeystore = Properties().apply {
+        val f = rootProject.file("keystore.properties")
+        if (f.exists()) { f.inputStream().use { load(it) } }
+    }
+    signingConfigs {
+        create("release") {
+            keyAlias = rahtiKeystore["keyAlias"] as String
+            keyPassword = rahtiKeystore["password"] as String
+            storeFile = file(rahtiKeystore["storeFile"] as String)
+            storePassword = rahtiKeystore["storePassword"] as String
+        }
+    }
+    buildTypes {"#,
+            1,
+        )
+        .replacen(
+            "        getByName(\"release\") {",
+            "        getByName(\"release\") {\n            signingConfig = signingConfigs.getByName(\"release\")",
+            1,
+        );
+
+    let upgraded = crate::run::with_signing(&legacy).expect("a recognised shape");
+    assert!(!upgraded.contains("as String"), "{upgraded}");
+    assert!(
+        !upgraded.contains("signingConfig = signingConfigs.getByName"),
+        "{upgraded}"
+    );
+    assert_eq!(upgraded.matches("signingConfigs {").count(), 1);
+    assert_eq!(
+        crate::run::with_signing(&upgraded).as_deref(),
+        Some(upgraded.as_str())
+    );
+}
+
+#[test]
+fn a_gradle_file_with_windows_line_endings_is_still_recognised() {
+    let crlf = TAURI_GRADLE.replace('\n', "\r\n");
+    let patched = crate::run::with_signing(&crlf).expect("a recognised shape");
+    assert!(patched.contains("signingConfigs {"));
+    assert!(
+        !patched.replace("\r\n", "").contains('\n'),
+        "line endings were mixed"
+    );
+}
+
+#[test]
+fn a_keystore_that_is_not_there_is_refused_before_the_build() {
+    // Otherwise every ABI compiles first and Gradle says so at the very end.
+    let root = with_gradle("signing-missing-file");
+    let _signing = Signing::with(&root.join("nowhere.jks"), "storepass", "keypass");
+
+    let error = crate::run::configure_signing(&root).expect_err("no keystore file");
+    assert!(error.to_string().contains("names no keystore"), "{error}");
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -310,13 +495,33 @@ fn a_half_configured_key_is_refused_rather_than_producing_an_unsigned_release() 
     let _signing = Signing::none();
     // SAFETY: `_signing` holds the lock for the whole test.
     unsafe {
-        std::env::set_var("RAHTI_NATIVE_ANDROID_KEYSTORE", "C:\\keys\\release.jks");
+        std::env::set_var("RAHTI_NATIVE_ANDROID_KEYSTORE", keystore_in(&root));
     }
 
     let error = crate::run::configure_signing(&root).expect_err("a half-configured key");
     assert!(error.to_string().contains("unsigned"), "{error}");
 
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn an_unsigned_release_package_is_reported() {
+    // Gradle names it `…-unsigned.apk` and reports success.
+    let build = |debug| crate::args::Build {
+        target: rahti_native::Platform::Android,
+        format: None,
+        debug,
+        abi: None,
+        device: None,
+    };
+    let unsigned = [std::path::PathBuf::from(
+        "out/app-universal-release-unsigned.apk",
+    )];
+    let signed = [std::path::PathBuf::from("out/app-universal-release.apk")];
+
+    assert!(crate::run::unsigned_release(&build(false), &unsigned).is_some());
+    assert!(crate::run::unsigned_release(&build(false), &signed).is_none());
+    assert!(crate::run::unsigned_release(&build(true), &unsigned).is_none());
 }
 
 // -------------------------------------------------------- launcher icons
