@@ -503,9 +503,9 @@ RAHTI_NATIVE_ANDROID_KEY_ALIAS
 RAHTI_NATIVE_ANDROID_KEY_PASSWORD
 ```
 
-`doctor --release` says which are missing. `build --target android --debug`
-produces a package that installs without any of them, which is what testing
-wants.
+`doctor --release` checks them. Without the Android ones a release is signed
+with this machine's own key (see below), and `build --target android --debug`
+is signed with Android's debug key, which is what testing wants.
 
 The two platforms get there differently, and the Android one is worth knowing
 about. Tauri reads the Windows certificate from the environment, so those two
@@ -534,6 +534,30 @@ build owning it:
   signing configuration only applies when the file names a key.
 - A release that comes out unsigned anyway is reported as a warning, in the
   output and in `native/.rahti/build.json`.
+
+### Without a key of your own
+
+Android installs nothing unsigned, so a release build never comes out
+unsigned. With no `RAHTI_NATIVE_ANDROID_KEYSTORE` set, it signs with this
+machine's release key for the application, and makes that key the first time:
+
+```text
+Windows  %APPDATA%\rahti-native\keys\<identifier>\
+macOS    ~/Library/Application Support/rahti-native/keys/<identifier>/
+Linux    $XDG_DATA_HOME (or ~/.local/share)/rahti-native/keys/<identifier>/
+```
+
+`RAHTI_NATIVE_KEY_DIR` replaces the `…/rahti-native/keys` part. The folder holds
+`release.jks` and `release-key.json` with the alias and the generated
+passwords; it is outside the project, so it is never committed. The build says
+which key signed, and `native/.rahti/build.json` records it under `signing`.
+
+**Back that folder up.** Every update to an installed application has to be
+signed with the key that signed the first install, so the key is made once and
+never replaced; a folder holding one of the two files and not the other stops
+the build rather than being overwritten. On Google Play it is your upload key.
+To build on another machine, copy the folder there, or point the
+`RAHTI_NATIVE_ANDROID_*` variables at it.
 
 ## Shutdown
 

@@ -26,6 +26,7 @@ mod doctor;
 mod icons;
 mod init;
 mod project;
+mod release_key;
 mod run;
 mod schema;
 mod shell;

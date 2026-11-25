@@ -8,4 +8,5 @@
 mod android;
 mod args;
 mod init;
+mod release_key;
 mod run;

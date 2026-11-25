@@ -47,7 +47,7 @@ pub fn dev(project: &Project, config: &NativeConfig, args: &Dev) -> Result<(), N
     // In this order: the JDK has to suit the Gradle version the generated
     // project pins, so that project has to exist first.
     if args.target == Platform::Android {
-        ensure_android_project(project, config)?;
+        ensure_android_project(project, config, false)?;
         android_environment(&mut command, project)?;
         forward_database_port(project, config);
     }
@@ -163,9 +163,10 @@ pub fn build(project: &Project, config: &NativeConfig, args: &Build) -> Result<(
         None => args.format,
     };
 
+    let mut signer = None;
     let mut command = match args.target {
         Platform::Android => {
-            ensure_android_project(project, config)?;
+            signer = Some(ensure_android_project(project, config, !args.debug)?);
             let mut command = doctor::cargo_tauri(&["android", "build"]);
             // `apk` installs on a device; `aab` is what Google Play takes and
             // is not installable as it is. Naming neither builds Tauri's
@@ -221,7 +222,15 @@ pub fn build(project: &Project, config: &NativeConfig, args: &Build) -> Result<(
         None => false,
     };
 
-    write_build_report(project, args, abi, &artifacts, &warnings, installed)
+    write_build_report(
+        project,
+        args,
+        abi,
+        &artifacts,
+        &warnings,
+        installed,
+        signer.as_ref(),
+    )
 }
 
 /// The one thing a successful debug build can do badly: be passed on.
@@ -395,7 +404,11 @@ fn prepare(
 /// Generated rather than committed: the Android project it writes carries
 /// absolute paths from the machine that created it, which is why the shell's
 /// `.gitignore` excludes it.
-fn ensure_android_project(project: &Project, config: &NativeConfig) -> Result<(), NativeError> {
+fn ensure_android_project(
+    project: &Project,
+    config: &NativeConfig,
+    release: bool,
+) -> Result<Signer, NativeError> {
     let generated = project.native_dir().join("gen/android");
 
     if !generated.is_dir() {
@@ -411,11 +424,45 @@ fn ensure_android_project(project: &Project, config: &NativeConfig) -> Result<()
     // time somebody deleted it.
     allow_loopback_cleartext(&generated)?;
     install_android_icons(project, &generated)?;
-    configure_signing(&generated)?;
+
+    // The configured key wins. A release without one signs with this
+    // machine's key rather than coming out unsigned, which Android refuses to
+    // install. A debug build is signed with Android's debug key.
+    let (key, signer) = match signing_key()? {
+        Some(key) => (Some(key), Signer::Environment),
+        None if release => {
+            let key = crate::release_key::machine_key(project, config)?;
+            let dir = crate::release_key::key_dir(&config.identifier).unwrap_or_default();
+            (Some(key), Signer::Machine(dir))
+        }
+        None => (None, Signer::Debug),
+    };
+    configure_signing_with(&generated, key.as_ref())?;
 
     sync_android_name(&generated, &config.product_name)?;
 
-    Ok(())
+    Ok(signer)
+}
+
+/// What signed an Android package, for the build report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Signer {
+    /// The key `RAHTI_NATIVE_ANDROID_*` named.
+    Environment,
+    /// This machine's key for the application, in this directory.
+    Machine(PathBuf),
+    /// Android's debug key.
+    Debug,
+}
+
+impl Signer {
+    pub(crate) fn to_json(&self) -> serde_json::Value {
+        match self {
+            Signer::Environment => serde_json::json!({ "key": "environment" }),
+            Signer::Machine(dir) => serde_json::json!({ "key": "machine", "dir": dir }),
+            Signer::Debug => serde_json::json!({ "key": "debug" }),
+        }
+    }
 }
 
 /// Give the generated Android project the current product name.
@@ -583,10 +630,20 @@ fn walk(dir: &Path) -> Result<Vec<PathBuf>, NativeError> {
 /// key as usual and a release build is unsigned — and a `keystore.properties`
 /// an earlier signed build left behind is removed, so that neither a stale key
 /// nor its passwords outlive the variables that supplied them.
+#[cfg(test)]
 pub(crate) fn configure_signing(generated: &Path) -> Result<(), NativeError> {
+    configure_signing_with(generated, signing_key()?.as_ref())
+}
+
+/// [`configure_signing`] with the key already chosen: the configured one, this
+/// machine's (see `release_key`), or none for a debug build.
+pub(crate) fn configure_signing_with(
+    generated: &Path,
+    key: Option<&SigningKey>,
+) -> Result<(), NativeError> {
     let properties_path = generated.join("keystore.properties");
 
-    let Some(key) = signing_key()? else {
+    let Some(key) = key else {
         if properties_path.exists() {
             std::fs::remove_file(&properties_path)
                 .map_err(|e| NativeError::io("android", &properties_path, e))?;
@@ -616,7 +673,7 @@ pub(crate) fn configure_signing(generated: &Path) -> Result<(), NativeError> {
     if patched != gradle {
         std::fs::write(&gradle_path, patched)
             .map_err(|e| NativeError::io("android", &gradle_path, e))?;
-        println!("  android: release signing wired in from RAHTI_NATIVE_ANDROID_*");
+        println!("  android: release signing wired into the Gradle project");
     }
     Ok(())
 }
@@ -714,7 +771,31 @@ pub(crate) struct SigningKey {
     key_password: String,
 }
 
+/// Written by hand so that no password reaches a log or a panic message.
+impl std::fmt::Debug for SigningKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SigningKey")
+            .field("keystore", &self.keystore)
+            .field("alias", &self.alias)
+            .finish_non_exhaustive()
+    }
+}
+
 impl SigningKey {
+    pub(crate) fn new(
+        keystore: PathBuf,
+        store_password: String,
+        alias: String,
+        key_password: String,
+    ) -> Self {
+        SigningKey {
+            keystore,
+            store_password,
+            alias,
+            key_password,
+        }
+    }
+
     /// `keystore.properties`, which Gradle reads as a Java properties file.
     ///
     /// Every value is escaped: in that format a backslash starts an escape,
@@ -1160,8 +1241,12 @@ fn write_build_report(
     artifacts: &[PathBuf],
     warnings: &[doctor::Finding],
     installed: bool,
+    signer: Option<&Signer>,
 ) -> Result<(), NativeError> {
-    let report = build_report(args, abi, artifacts, warnings, installed);
+    let mut report = build_report(args, abi, artifacts, warnings, installed);
+    if let Some(signer) = signer {
+        report["signing"] = signer.to_json();
+    }
     let path = build_report_path(project);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| NativeError::io("build", parent, e))?;

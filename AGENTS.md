@@ -52,8 +52,12 @@ is a rule users read.
    edited one alone and reports it. `--force` is the only way to take one back,
    and it never keeps what it replaced.
 9. Never write a credential to `rahti.native.json`, to `tauri.conf.json`, or to
-   any file this tool generates outside the ignored `gen/`. Signing comes from
-   `RAHTI_NATIVE_*` environment variables. `AUTH_SECRET` is not read at all.
+   any file this tool generates *inside the project* outside the ignored
+   `gen/`. Signing comes from `RAHTI_NATIVE_*` environment variables; without
+   the Android ones, a release signs with the machine's own key for the
+   identifier, kept outside the project (`release_key.rs`), made once and
+   never replaced. A release is never left unsigned, because Android installs
+   nothing unsigned. `AUTH_SECRET` is not read at all.
 10. The default Content-Security-Policy is `script-src 'self'` with
     `require-trusted-types-for 'script'; trusted-types pulsepoint`, the policy
     a Rahti web deployment sends. PulsePoint runs only the client registry the

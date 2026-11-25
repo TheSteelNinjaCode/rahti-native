@@ -21,6 +21,8 @@ path = "src/main.rs"
 # what the shell enforces.
 rahti-native = { workspace = true }
 serde_json = "1"
+# The machine-made release key's passwords, from the operating system's generator.
+getrandom = "0.3"
 
 # No Tauri dependency, deliberately. Packaging is delegated to `cargo tauri`,
 # which has to match the `tauri` version in the application's own

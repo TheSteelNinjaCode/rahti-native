@@ -484,20 +484,43 @@ fn android(project: &Project, config: &NativeConfig, release: bool) -> Vec<Findi
                 "RAHTI_NATIVE_ANDROID_KEYSTORE names a keystore, with its password and alias",
             ),
             Err(error) => Finding::missing("release signing", error.to_string()),
-            Ok(None) => Finding::warning(
-                "release signing",
-                "No keystore is configured. An unsigned release AAB is refused by Google Play\n   \
-                 and an unsigned release APK will not install.\n   \
-                 Set RAHTI_NATIVE_ANDROID_KEYSTORE, RAHTI_NATIVE_ANDROID_KEYSTORE_PASSWORD,\n   \
-                 RAHTI_NATIVE_ANDROID_KEY_ALIAS and RAHTI_NATIVE_ANDROID_KEY_PASSWORD in the\n   \
-                 environment of the build.\n   \
-                 Never commit a keystore or any of these values. `--debug` builds a package\n   \
-                 that installs without them.",
-            ),
+            Ok(None) => machine_signing(&config.identifier),
         });
     }
 
     findings
+}
+
+/// No key configured: a release signs with this machine's key, made on the
+/// first release build. See `release_key`.
+fn machine_signing(identifier: &str) -> Finding {
+    let Some(dir) = crate::release_key::key_dir(identifier) else {
+        return Finding::missing(
+            "release signing",
+            "No keystore is configured, and this machine has no folder to keep one in\n   \
+             (no APPDATA, HOME or RAHTI_NATIVE_KEY_DIR). Set RAHTI_NATIVE_KEY_DIR, or set\n   \
+             RAHTI_NATIVE_ANDROID_KEYSTORE, RAHTI_NATIVE_ANDROID_KEYSTORE_PASSWORD and\n   \
+             RAHTI_NATIVE_ANDROID_KEY_ALIAS.",
+        );
+    };
+    match crate::release_key::load(&dir) {
+        Err(error) => Finding::missing("release signing", error.to_string()),
+        Ok(Some(_)) => Finding::ok(
+            "release signing",
+            format!(
+                "this machine's release key, in {} — keep it backed up",
+                dir.display()
+            ),
+        ),
+        Ok(None) => Finding::ok(
+            "release signing",
+            format!(
+                "no keystore is configured, so the first release build makes one in {} \
+                 and signs with it. RAHTI_NATIVE_ANDROID_KEYSTORE takes precedence when set",
+                dir.display()
+            ),
+        ),
+    }
 }
 
 /// Whether this account may create a symbolic link.
