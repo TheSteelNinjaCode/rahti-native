@@ -28,7 +28,7 @@ release is live, the tests build beside that checkout through the `path` in
 So the release order across the two repositories is:
 
 1. `rahti` 0.0.76 — `rahti-js`, `rahti-macros`, `rahti-build`, `rahti-mcp`, `rahti`, `cargo-rahti`.
-2. `rahti-native` 0.0.47 — `rahti-native`, then `cargo-rahti-native`.
+2. `rahti-native` 0.0.48 — `rahti-native`, then `cargo-rahti-native`.
 
 ## The `rahti` dependency
 
