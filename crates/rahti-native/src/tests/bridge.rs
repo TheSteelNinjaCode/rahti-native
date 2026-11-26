@@ -84,6 +84,46 @@ fn only_pages_using_popovers_warn_about_an_old_webview() {
     assert!(js.contains("rahti-webview-compatibility"), "{js}");
 }
 
+#[test]
+fn pull_to_refresh_is_for_the_pages_that_ask_for_it() {
+    // Not on everywhere: a pull on a half-filled form would throw the form
+    // away. So nothing happens until an element opts in.
+    let js = script();
+    assert!(
+        js.contains("closest(\"[data-rahti-pull-to-refresh]\")"),
+        "{js}"
+    );
+    assert!(js.contains("if (!host) return;"), "{js}");
+    // And the listener that can block scrolling exists only while a finger
+    // is down on such a page.
+    let start = js.find("addEventListener(\"touchstart\"").unwrap();
+    let block = js.find("{ passive: false }").unwrap();
+    assert!(block > start, "touchmove is registered up front: {js}");
+    assert_eq!(js.matches("{ passive: false }").count(), 1);
+}
+
+#[test]
+fn a_page_can_refresh_its_own_data_instead_of_reloading() {
+    let js = script();
+    assert!(js.contains("new CustomEvent(\"rahti:refresh\""), "{js}");
+    assert!(js.contains("cancelable: true"), "{js}");
+    assert!(js.contains("waitUntil"), "{js}");
+    // Reloading is what happens when nobody handled it.
+    assert!(
+        js.contains("if (host.dispatchEvent(event)) {\n        window.location.reload();"),
+        "{js}"
+    );
+}
+
+#[test]
+fn the_pull_indicator_is_built_without_markup() {
+    // The page requires Trusted Types, so an `innerHTML` here would throw and
+    // take the rest of the bridge with it.
+    let js = script();
+    assert!(!js.contains("innerHTML"), "{js}");
+    assert!(!js.contains("insertAdjacentHTML"), "{js}");
+}
+
 #[tokio::test]
 async fn the_route_serves_it_as_javascript_and_never_from_a_cache() {
     use axum::body::Body;

@@ -536,6 +536,41 @@ html! {
 in a browser, and a page that assumed otherwise is a page your web deployment
 breaks on. Every use is a capability check with a web fallback.
 
+### Pull to refresh
+
+A WebView has no pull-to-refresh of its own, and a package does not turn one on
+everywhere: a pull on a half-filled form would throw the form away. A page that
+is a list, a feed or a dashboard asks for it, by marking the element that
+scrolls:
+
+```rust
+html! {
+    <main class="overflow-auto" data-rahti-pull-to-refresh>
+        // the list
+    </main>
+}
+```
+
+Put it on `<body>` when the document itself scrolls. Pulling down from the top
+shows the indicator, and letting go past it reloads the page. A drag that
+starts inside a scrolled inner list is left to that list.
+
+A page that would rather fetch its data again than reload handles the event:
+
+```javascript
+main.addEventListener("rahti:refresh", (event) => {
+  event.preventDefault();                    // no reload
+  event.detail.waitUntil(refreshView());     // the indicator spins until this settles
+});
+```
+
+The attribute does nothing in a browser, where pull-to-refresh is the browser's
+own. Add `overscroll-behavior-y: contain` to the element if the web deployment
+should not have that either.
+
+Pinch-zoom needs nothing: an Android WebView does not zoom a page unless the
+application turns zoom controls on, and the shell does not.
+
 ### Why a global and not `pp.native`
 
 Because a reactive block cannot see `pp.native`, and that was measured rather

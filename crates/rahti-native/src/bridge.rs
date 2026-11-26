@@ -177,6 +177,155 @@ pub fn bridge_script(platform: &str, version: &str) -> String {
     explainOldWebView();
   }}
 
+  // Pull to refresh, for the pages that ask for it.
+  //
+  // A WebView has none of its own, and it is not on everywhere because it is
+  // not right everywhere: a pull on a half-filled form would throw the form
+  // away. A page opts in by putting `data-rahti-pull-to-refresh` on the
+  // element that scrolls (or on <html> or <body> when the document does).
+  //
+  // The pull fires a cancelable `rahti:refresh` event on that element. Left
+  // alone, the page reloads. A page that refreshes its own data instead calls
+  // `event.preventDefault()` and hands `event.detail.waitUntil` a promise.
+  (function () {{
+    var TRIGGER = 64;
+    var MAX = 96;
+    var SIZE = 36;
+
+    var host = null;      // the element that opted in
+    var scroller = null;  // what actually scrolls
+    var startX = 0;
+    var startY = 0;
+    var pulling = false;
+    var refreshing = false;
+    var distance = 0;
+    var badge = null;
+    var ring = null;
+    var spin = 0;
+
+    function draw() {{
+      if (!badge) {{
+        badge = document.createElement("div");
+        badge.setAttribute("aria-hidden", "true");
+        var s = badge.style;
+        s.position = "fixed";
+        s.zIndex = "2147483646";
+        s.width = SIZE + "px";
+        s.height = SIZE + "px";
+        s.marginLeft = -SIZE / 2 + "px";
+        s.borderRadius = "50%";
+        s.background = "Canvas";
+        s.color = "CanvasText";
+        s.boxShadow = "0 1px 6px rgba(0,0,0,.3)";
+        s.display = "flex";
+        s.alignItems = "center";
+        s.justifyContent = "center";
+        s.pointerEvents = "none";
+        ring = document.createElement("div");
+        var r = ring.style;
+        r.width = "16px";
+        r.height = "16px";
+        r.borderRadius = "50%";
+        r.border = "2.5px solid currentColor";
+        r.borderTopColor = "transparent";
+        badge.appendChild(ring);
+      }}
+      if (!badge.isConnected) document.body.appendChild(badge);
+
+      var box = scroller === document.scrollingElement
+        ? {{ top: 0, left: 0, width: window.innerWidth }}
+        : scroller.getBoundingClientRect();
+      var shown = refreshing ? TRIGGER : distance;
+      badge.style.left = box.left + box.width / 2 + "px";
+      badge.style.top = box.top + "px";
+      badge.style.transform = "translateY(" + (shown - SIZE) + "px)";
+      badge.style.opacity = String(Math.min(1, shown / TRIGGER));
+      ring.style.transform =
+        "rotate(" + Math.round(refreshing ? spin : (shown / TRIGGER) * 270) + "deg)";
+    }}
+
+    function hide() {{
+      pulling = false;
+      refreshing = false;
+      distance = 0;
+      if (badge && badge.isConnected) badge.remove();
+    }}
+
+    function turn() {{
+      if (!refreshing) return;
+      spin = (spin + 9) % 360;
+      draw();
+      requestAnimationFrame(turn);
+    }}
+
+    function refresh() {{
+      refreshing = true;
+      requestAnimationFrame(turn);
+
+      var pending = null;
+      var event = new CustomEvent("rahti:refresh", {{
+        bubbles: true,
+        cancelable: true,
+        detail: {{ waitUntil: function (promise) {{ pending = promise; }} }},
+      }});
+      if (host.dispatchEvent(event)) {{
+        window.location.reload();
+        return;
+      }}
+      Promise.resolve(pending).then(hide, hide);
+    }}
+
+    function move(event) {{
+      if (refreshing || event.touches.length !== 1) return;
+      var dx = event.touches[0].clientX - startX;
+      var dy = event.touches[0].clientY - startY;
+      if (!pulling) {{
+        if (dy <= 10 || Math.abs(dx) > dy || scroller.scrollTop > 0) return;
+        pulling = true;
+      }}
+      // The pull is ours now: the pane must not also overscroll.
+      if (event.cancelable) event.preventDefault();
+      distance = Math.max(0, Math.min(MAX, (dy - 10) * 0.5));
+      draw();
+    }}
+
+    function end() {{
+      document.removeEventListener("touchmove", move);
+      document.removeEventListener("touchend", end);
+      document.removeEventListener("touchcancel", end);
+      if (refreshing) return;
+      if (pulling && distance >= TRIGGER) refresh();
+      else hide();
+    }}
+
+    document.addEventListener("touchstart", function (event) {{
+      if (refreshing || event.touches.length !== 1) return;
+      var target = event.target;
+      if (target && target.nodeType !== 1) target = target.parentElement;
+      host = target && target.closest ? target.closest("[data-rahti-pull-to-refresh]") : null;
+      if (!host) return;
+
+      scroller = host === document.documentElement || host === document.body
+        ? document.scrollingElement
+        : host;
+      // Only from the top, and not from inside something of its own that has
+      // been scrolled: that drag belongs to the inner list.
+      for (var node = target; node && node !== host; node = node.parentElement) {{
+        if (node.scrollTop > 0) return;
+      }}
+      if (!scroller || scroller.scrollTop > 0) return;
+
+      startX = event.touches[0].clientX;
+      startY = event.touches[0].clientY;
+      pulling = false;
+      distance = 0;
+      // Not passive, and only while a finger is down on a page that asked.
+      document.addEventListener("touchmove", move, {{ passive: false }});
+      document.addEventListener("touchend", end);
+      document.addEventListener("touchcancel", end);
+    }}, {{ passive: true }});
+  }})();
+
   // Best-effort, and documented nowhere as the way in: in a context where
   // `pp` *is* the global object, `pp.native` also works and reads a little
   // better. Nothing depends on it succeeding.
