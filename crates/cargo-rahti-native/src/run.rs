@@ -427,6 +427,7 @@ fn ensure_android_project(
     keep_clear_of_system_bars(&generated)?;
     // After the insets: an older activity has no `onCreate` until they add it.
     crate::launch_screen::install(&generated, &config.android.splash)?;
+    crate::downloads::install(&generated)?;
 
     // The configured key wins. A release without one signs with this
     // machine's key rather than coming out unsigned, which Android refuses to

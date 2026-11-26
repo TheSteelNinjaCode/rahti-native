@@ -152,7 +152,7 @@ pub(crate) fn install(generated: &Path, splash: &SplashConfig) -> Result<(), Nat
 }
 
 /// Write `content` unless the file already holds it. Whether it wrote.
-fn write_if_changed(path: &Path, content: &str) -> Result<bool, NativeError> {
+pub(crate) fn write_if_changed(path: &Path, content: &str) -> Result<bool, NativeError> {
     if std::fs::read_to_string(path).is_ok_and(|current| current == content) {
         return Ok(false);
     }
@@ -205,7 +205,21 @@ pub(crate) fn application_theme(manifest: &str) -> String {
 /// `MainActivity.kt` with the launch screen's line in it (or, for `false`,
 /// without it), or `None` for a shape this tool does not recognise.
 pub(crate) fn with_launch_screen(source: &str, enabled: bool) -> Option<String> {
-    if source.contains(MARKER) == enabled {
+    with_on_create(source, MARKER, CODE, enabled)
+}
+
+/// `MainActivity.kt` with `code` after `super.onCreate` (or, for `false`,
+/// without it), or `None` for a shape this tool does not recognise.
+///
+/// `marker` is text inside `code` that says it is already there, which is
+/// what makes this idempotent.
+pub(crate) fn with_on_create(
+    source: &str,
+    marker: &str,
+    code: &str,
+    enabled: bool,
+) -> Option<String> {
+    if source.contains(marker) == enabled {
         return Some(source.to_string());
     }
     let crlf = source.contains("\r\n");
@@ -213,9 +227,9 @@ pub(crate) fn with_launch_screen(source: &str, enabled: bool) -> Option<String> 
 
     const SUPER: &str = "super.onCreate(savedInstanceState)\n";
     let patched = if !enabled {
-        text.replace(CODE, "")
+        text.replace(code, "")
     } else if text.matches(SUPER).count() == 1 {
-        text.replacen(SUPER, &format!("{SUPER}{CODE}"), 1)
+        text.replacen(SUPER, &format!("{SUPER}{code}"), 1)
     } else {
         return None;
     };
@@ -228,7 +242,7 @@ pub(crate) fn with_launch_screen(source: &str, enabled: bool) -> Option<String> 
 }
 
 /// The package a Kotlin source declares.
-fn kotlin_package(source: &str) -> Option<&str> {
+pub(crate) fn kotlin_package(source: &str) -> Option<&str> {
     let package = source
         .lines()
         .find_map(|line| line.trim().strip_prefix("package "))?
@@ -241,34 +255,16 @@ fn kotlin_package(source: &str) -> Option<&str> {
     legal.then_some(package)
 }
 
-/// The resource the launch screen draws: the launcher icon's foreground layer,
-/// which is the artwork without the launcher's mask or background.
+/// The resource the launch screen draws: the application's artwork inside
+/// the adaptive icon's safe zone, drawn large by `cargo rahti native icon` and
+/// copied in with the launcher icons.
 ///
-/// `None` when the project has neither kind, and the launch screen is then
+/// `None` when the project has no icon tree, and the launch screen is then
 /// the colour alone before Android 12 and the system's choice of icon after.
 fn launch_icon(res: &Path) -> Option<&'static str> {
-    let has = |kind: &str| {
-        std::fs::read_dir(res).is_ok_and(|entries| {
-            entries.flatten().any(|entry| {
-                let name = entry.file_name();
-                let name = name.to_string_lossy();
-                (name == kind || name.starts_with(&format!("{kind}-")))
-                    && ["png", "webp", "xml"].iter().any(|extension| {
-                        entry
-                            .path()
-                            .join(format!("ic_launcher_foreground.{extension}"))
-                            .is_file()
-                    })
-            })
-        })
-    };
-    if has("mipmap") {
-        Some("@mipmap/ic_launcher_foreground")
-    } else if has("drawable") {
-        Some("@drawable/ic_launcher_foreground")
-    } else {
-        None
-    }
+    res.join("drawable-nodpi/rahti_launch_icon.png")
+        .is_file()
+        .then_some("@drawable/rahti_launch_icon")
 }
 
 /// The launch screen's resource files, as `(path under res, content)`.

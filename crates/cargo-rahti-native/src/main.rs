@@ -23,6 +23,7 @@
 
 mod args;
 mod doctor;
+mod downloads;
 mod icons;
 mod init;
 mod launch_screen;

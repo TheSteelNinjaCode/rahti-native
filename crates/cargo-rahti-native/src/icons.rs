@@ -75,6 +75,12 @@ pub const DESKTOP: &[Icon] = &[
     },
 ];
 
+/// The launch screen's image, under `native/icons/`. See `launch_screen`.
+pub const LAUNCH_ICON: &str = "android/drawable-nodpi/rahti_launch_icon.png";
+
+/// The side of [`LAUNCH_ICON`] in pixels: 288dp on the densest screens.
+const LAUNCH_ICON_SIDE: &str = "1024";
+
 /// The Android launcher set, one entry per screen density.
 ///
 /// `ic_launcher` is the square icon, `ic_launcher_round` the round one older
@@ -82,6 +88,12 @@ pub const DESKTOP: &[Icon] = &[
 /// `mipmap-anydpi-v26/ic_launcher.xml` composes over the background colour in
 /// `values/ic_launcher_background.xml`.
 pub const ANDROID: &[Icon] = &[
+    // The launch screen's artwork: the adaptive layer drawn once, large, so a
+    // 288dp splash is not a launcher bitmap scaled up.
+    Icon {
+        path: LAUNCH_ICON,
+        bytes: include_bytes!("../assets/icons/android/drawable-nodpi/rahti_launch_icon.png"),
+    },
     Icon {
         path: "android/mipmap-anydpi-v26/ic_launcher.xml",
         bytes: include_bytes!("../assets/icons/android/mipmap-anydpi-v26/ic_launcher.xml"),
@@ -222,20 +234,26 @@ pub fn generate(project: &Project, args: &args::Icon) -> Result<(), NativeError>
     let adaptive = work.join("adaptive.svg");
     write(&adaptive, &adaptive_svg(&bytes, media_type))?;
 
-    tauri_icon(&native, &manifest, &work.join("set"))?;
-    tauri_icon(&native, &adaptive, &work.join("adaptive"))?;
+    tauri_icon(&native, &manifest, &work.join("set"), &[])?;
+    tauri_icon(&native, &adaptive, &work.join("adaptive"), &[])?;
+    tauri_icon(
+        &native,
+        &adaptive,
+        &work.join("launch"),
+        &["--png", LAUNCH_ICON_SIDE],
+    )?;
 
     let copies: Vec<(PathBuf, PathBuf)> = all()
         .map(|icon| {
-            let set = if icon.path.ends_with("ic_launcher_foreground.png") {
-                "adaptive"
+            let from = if icon.path == LAUNCH_ICON {
+                work.join("launch")
+                    .join(format!("{LAUNCH_ICON_SIDE}x{LAUNCH_ICON_SIDE}.png"))
+            } else if icon.path.ends_with("ic_launcher_foreground.png") {
+                work.join("adaptive").join(icon.path)
             } else {
-                "set"
+                work.join("set").join(icon.path)
             };
-            (
-                work.join(set).join(icon.path),
-                native.join("icons").join(icon.path),
-            )
+            (from, native.join("icons").join(icon.path))
         })
         .collect();
 
@@ -261,9 +279,14 @@ pub fn generate(project: &Project, args: &args::Icon) -> Result<(), NativeError>
     Ok(())
 }
 
-fn tauri_icon(native: &Path, input: &Path, output: &Path) -> Result<(), NativeError> {
+fn tauri_icon(
+    native: &Path,
+    input: &Path,
+    output: &Path,
+    options: &[&str],
+) -> Result<(), NativeError> {
     let mut command = crate::doctor::cargo_tauri(&["icon"]);
-    command.arg(input).arg("--output").arg(output);
+    command.arg(input).arg("--output").arg(output).args(options);
     command.current_dir(native);
     crate::run::execute(command, "icon")
 }

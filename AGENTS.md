@@ -69,16 +69,19 @@ is a rule users read.
     entries and Tauri reports their directory as the URI `asset://localhost/`,
     which no file server can open — serving them from `resource_dir()` 404s
     every asset on every device.
-12. Android needs five patches applied to the Tauri-generated project on
+12. Android needs six patches applied to the Tauri-generated project on
     **every** build, because `gen/android` is regenerated rather than reviewed:
     the loopback network-security configuration, the release signing wiring,
     the product name in `strings.xml`, the system-bar insets in
     `MainActivity.kt` (edge-to-edge otherwise puts the page under the status
-    bar, where it cannot be tapped), and the launch screen (`launch_screen.rs`:
+    bar, where it cannot be tapped), the launch screen (`launch_screen.rs`:
     a launch is otherwise a white window, then a blank WebView, then the
-    page). All are idempotent and all refuse to guess at a project shape they
-    do not recognise. The launch screen is the one with a switch,
+    page), and downloads (`downloads.rs`: a WebView drops a download it has
+    no listener for). All are idempotent and all refuse to guess at a project
+    shape they do not recognise. The launch screen is the one with a switch,
     `android.splash.enabled`, and turning it off removes what it installed.
+    Kotlin these patches need goes in a file of this tool's own beside
+    `MainActivity.kt`, and the activity gains one line that calls it.
 13. Agents run this tool as often as people do, and usually keep only the end of
     a build's output. So every command ends on its own: nothing an agent needs
     may require a session that stays running, and `dev` is not the only way onto
@@ -88,6 +91,10 @@ is a rule users read.
     badly — warnings are printed even when nothing blocks the build.
 14. `cargo-rahti-native` has no image dependency. `icon` writes SVG and lets
     `cargo tauri icon` draw it.
+15. A default is what most applications need, on without being asked for.
+    New behaviour is designed for shells generated from now on: no
+    compatibility path for an older shell, and no switch that exists only for
+    one.
 
 ## What lives in the framework, not here
 

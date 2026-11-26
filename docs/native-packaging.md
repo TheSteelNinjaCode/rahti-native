@@ -329,14 +329,38 @@ It is on without being asked for. The colours are the only thing to set:
 ```
 
 `background` is `#ffffff` and `backgroundDark` is `#121212` unless you say
-otherwise; each is six hex digits. The icon is the foreground layer of your
-launcher icon, so `cargo rahti native icon` changes both.
+otherwise; each is six hex digits. The icon is your launcher artwork, drawn
+large as `native/icons/android/drawable-nodpi/rahti_launch_icon.png`, so
+`cargo rahti native icon` changes the launcher and the launch screen together.
 
 The launch screen never waits more than ten seconds, whatever the page does.
 
-A shell that brings its own launch screen sets `"splash": { "enabled": false }`,
-and the next build takes this one out. A launcher activity that already names a
-theme of its own is reported, not edited.
+`"splash": { "enabled": false }` turns it off, and the next build takes it out.
+A launcher activity that already names a theme of its own is reported, not
+edited.
+
+### Android and downloads
+
+An Android WebView drops a download unless the application gives it somewhere
+to go, and Tauri's generated one does not. So a link with `download` on it, or
+a response sent as an attachment, worked in a browser and in the Windows
+package and did nothing on a phone.
+
+Every Android build therefore wires downloads up. The file is fetched from the
+application's own server, with the WebView's cookies, and saved to the device's
+Downloads; a short message says so. Before Android 10 it is saved to the
+application's own Downloads folder, which needs no storage permission.
+
+Three limits follow from how a WebView reports a download:
+
+- It is fetched again with a `GET`. A file produced by a `POST` needs a link
+  the server can answer twice.
+- Only the application's own origin is fetched. A link to anywhere else opens
+  in the user's browser, which downloads it.
+- A `blob:` or `data:` URL made in the page is not saved. Serve the file from
+  a route instead.
+
+It is not a native command: a page cannot say where a file goes.
 
 The launcher icon has the same kind of trap: Android shows only the middle of
 the adaptive icon's 108dp layer through the launcher's mask. The default icons

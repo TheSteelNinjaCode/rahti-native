@@ -42,12 +42,12 @@ fn generated(label: &str) -> std::path::PathBuf {
     ));
     let _ = std::fs::remove_dir_all(&root);
     let java = root.join("app/src/main/java/com/example/app");
-    let mipmap = root.join("app/src/main/res/mipmap-hdpi");
+    let mipmap = root.join("app/src/main/res/drawable-nodpi");
     std::fs::create_dir_all(&java).unwrap();
     std::fs::create_dir_all(&mipmap).unwrap();
     std::fs::write(root.join("app/src/main/AndroidManifest.xml"), MANIFEST).unwrap();
     std::fs::write(java.join("MainActivity.kt"), ACTIVITY).unwrap();
-    std::fs::write(mipmap.join("ic_launcher_foreground.png"), b"png").unwrap();
+    std::fs::write(mipmap.join("rahti_launch_icon.png"), b"png").unwrap();
     root
 }
 
@@ -82,14 +82,14 @@ fn a_launch_shows_the_icon_on_the_configured_colours() {
         v31.contains("android:windowSplashScreenBackground"),
         "{v31}"
     );
-    assert!(v31.contains("@mipmap/ic_launcher_foreground"), "{v31}");
+    assert!(v31.contains("@drawable/rahti_launch_icon"), "{v31}");
 
     // Before it: the window background.
     let background = read(
         &root,
         "app/src/main/res/drawable/rahti_launch_background.xml",
     );
-    assert!(background.contains("@mipmap/ic_launcher_foreground"));
+    assert!(background.contains("@drawable/rahti_launch_icon"));
 
     let manifest = read(&root, MANIFEST_FILE);
     assert!(
@@ -231,7 +231,7 @@ fn an_activity_with_windows_line_endings_keeps_them() {
 fn a_project_without_a_foreground_icon_gets_the_colour_alone() {
     let files = resources(&SplashConfig::default(), "Theme.demo", None);
     for (file, content) in &files {
-        assert!(!content.contains("ic_launcher_foreground"), "{file}");
+        assert!(!content.contains("rahti_launch_icon"), "{file}");
     }
     // Still a splash: the colour is what replaces the white window.
     assert!(files[2].1.contains("android:windowSplashScreenBackground"));
