@@ -425,6 +425,8 @@ fn ensure_android_project(
     allow_loopback_cleartext(&generated)?;
     install_android_icons(project, &generated)?;
     keep_clear_of_system_bars(&generated)?;
+    // After the insets: an older activity has no `onCreate` until they add it.
+    crate::launch_screen::install(&generated, &config.android.splash)?;
 
     // The configured key wins. A release without one signs with this
     // machine's key rather than coming out unsigned, which Android refuses to
@@ -1059,7 +1061,7 @@ pub(crate) fn with_insets(source: &str) -> Option<String> {
 }
 
 /// The one `MainActivity.kt` under `java/`, wherever the identifier put it.
-fn find_main_activity(java: &Path) -> Option<PathBuf> {
+pub(crate) fn find_main_activity(java: &Path) -> Option<PathBuf> {
     let mut found: Vec<PathBuf> = walk(java)
         .ok()?
         .into_iter()

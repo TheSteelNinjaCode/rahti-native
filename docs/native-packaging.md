@@ -308,6 +308,36 @@ project. The page gets exactly the area it can use, and a form field the
 keyboard would cover scrolls into view as it does in a browser. An activity
 the tool does not recognise is reported with the code to add, not edited.
 
+The window shows behind those bars, in the launch screen's colour (below), and
+the clock and battery icons are drawn dark or light to be readable on it.
+
+### Android and the launch screen
+
+Android draws a window the moment the launcher is tapped, long before a WebView
+has a page to show. Left alone that window is white, then the WebView is blank,
+then the page arrives. So every Android build installs a launch screen: the
+application's icon on a plain colour, kept on top until the first page has
+painted, then faded once.
+
+It is on without being asked for. The colours are the only thing to set:
+
+```json
+"android": {
+  "minSdk": 24,
+  "splash": { "background": "#0a2540", "backgroundDark": "#06121f" }
+}
+```
+
+`background` is `#ffffff` and `backgroundDark` is `#121212` unless you say
+otherwise; each is six hex digits. The icon is the foreground layer of your
+launcher icon, so `cargo rahti native icon` changes both.
+
+The launch screen never waits more than ten seconds, whatever the page does.
+
+A shell that brings its own launch screen sets `"splash": { "enabled": false }`,
+and the next build takes this one out. A launcher activity that already names a
+theme of its own is reported, not edited.
+
 The launcher icon has the same kind of trap: Android shows only the middle of
 the adaptive icon's 108dp layer through the launcher's mask. The default icons
 and everything `cargo rahti native icon` writes keep the whole image inside

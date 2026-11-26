@@ -69,13 +69,16 @@ is a rule users read.
     entries and Tauri reports their directory as the URI `asset://localhost/`,
     which no file server can open — serving them from `resource_dir()` 404s
     every asset on every device.
-12. Android needs four patches applied to the Tauri-generated project on
+12. Android needs five patches applied to the Tauri-generated project on
     **every** build, because `gen/android` is regenerated rather than reviewed:
     the loopback network-security configuration, the release signing wiring,
-    the product name in `strings.xml`, and the system-bar insets in
+    the product name in `strings.xml`, the system-bar insets in
     `MainActivity.kt` (edge-to-edge otherwise puts the page under the status
-    bar, where it cannot be tapped). All are idempotent and all refuse to
-    guess at a project shape they do not recognise.
+    bar, where it cannot be tapped), and the launch screen (`launch_screen.rs`:
+    a launch is otherwise a white window, then a blank WebView, then the
+    page). All are idempotent and all refuse to guess at a project shape they
+    do not recognise. The launch screen is the one with a switch,
+    `android.splash.enabled`, and turning it off removes what it installed.
 13. Agents run this tool as often as people do, and usually keep only the end of
     a build's output. So every command ends on its own: nothing an agent needs
     may require a session that stays running, and `dev` is not the only way onto

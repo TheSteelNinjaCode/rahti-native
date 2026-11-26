@@ -72,6 +72,27 @@ pub fn json() -> String {
           "type": "integer",
           "minimum": {min_sdk},
           "description": "The lowest Android API level the package installs on. Tauri 2 needs at least {min_sdk}."
+        }},
+        "splash": {{
+          "type": "object",
+          "additionalProperties": false,
+          "description": "The launch screen: the application's icon on a plain colour, held until the first page has painted. The same colours stay behind the status and navigation bars afterwards.",
+          "properties": {{
+            "enabled": {{
+              "type": "boolean",
+              "description": "On by default. `false` leaves the generated Android project's theme alone, for a shell that brings its own launch screen."
+            }},
+            "background": {{
+              "type": "string",
+              "pattern": "^#[0-9A-Fa-f]{{6}}$",
+              "description": "Behind the icon in light mode. `#ffffff` by default."
+            }},
+            "backgroundDark": {{
+              "type": "string",
+              "pattern": "^#[0-9A-Fa-f]{{6}}$",
+              "description": "Behind the icon when the device is in dark mode. `#121212` by default."
+            }}
+          }}
         }}
       }}
     }},

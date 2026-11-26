@@ -106,6 +106,57 @@ fn a_min_sdk_below_tauris_floor_is_refused() {
     assert!(config.validate().is_err());
 }
 
+#[test]
+fn the_launch_screen_is_on_without_being_asked_for() {
+    let config = valid();
+    assert!(config.android.splash.enabled);
+    assert_eq!(config.android.splash.background, "#ffffff");
+    assert_eq!(config.android.splash.background_dark, "#121212");
+    // And a configuration that never mentioned it does not grow a section.
+    assert!(!config.to_json().contains("splash"));
+}
+
+#[test]
+fn one_launch_colour_can_be_set_without_the_others() {
+    let parsed = NativeConfig::parse(
+        r##"{
+            "schema": 1,
+            "productName": "Minimal",
+            "identifier": "com.example.minimal",
+            "version": "1.0.0",
+            "targets": ["android"],
+            "android": { "minSdk": 24, "splash": { "background": "#0a2540" } }
+        }"##,
+    )
+    .expect("a splash with one field");
+
+    assert!(parsed.android.splash.enabled);
+    assert_eq!(parsed.android.splash.background, "#0a2540");
+    assert_eq!(parsed.android.splash.background_dark, "#121212");
+
+    let again = NativeConfig::parse(&parsed.to_json()).unwrap();
+    assert_eq!(parsed, again);
+}
+
+#[test]
+fn a_launch_colour_that_is_not_six_hex_digits_is_refused() {
+    // It is written into an Android resource file: a colour name fails a
+    // Gradle build minutes in, and markup would be markup.
+    for bad in [
+        "white",
+        "#fff",
+        "0a2540",
+        "#0a25401f",
+        "#gggggg",
+        "#fff\"/>",
+    ] {
+        let mut config = valid();
+        config.android.splash.background_dark = bad.to_string();
+        let error = config.validate().expect_err(bad);
+        assert!(error.to_string().contains("backgroundDark"), "{error}");
+    }
+}
+
 // --------------------------------------------------------- identifiers
 
 #[test]

@@ -148,13 +148,69 @@ impl Default for WindowConfig {
 pub struct AndroidConfig {
     /// The lowest API level the package installs on.
     pub min_sdk: u32,
+
+    /// The launch screen. Default is not written out, so a configuration
+    /// that never asked about it does not grow a section.
+    #[serde(default, skip_serializing_if = "SplashConfig::is_default")]
+    pub splash: SplashConfig,
 }
 
 impl Default for AndroidConfig {
     fn default() -> Self {
         AndroidConfig {
             min_sdk: MIN_ANDROID_SDK,
+            splash: SplashConfig::default(),
         }
+    }
+}
+
+/// The Android launch screen: the application's icon on a plain colour, from
+/// the moment the launcher is tapped until the first page has painted.
+///
+/// On by default, because the alternative is not "no splash": Android shows a
+/// window before the WebView has anything to draw either way, and without
+/// this it is a white one.
+///
+/// The same two colours stay behind the status and navigation bars
+/// afterwards, which the page is kept clear of.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SplashConfig {
+    /// `false` leaves the generated Android project's own theme alone, for a
+    /// shell that brings its own launch screen.
+    #[serde(default = "yes")]
+    pub enabled: bool,
+
+    /// `#rrggbb`, behind the icon in light mode.
+    #[serde(default = "splash_light")]
+    pub background: String,
+
+    /// `#rrggbb`, behind the icon when the device is in dark mode.
+    #[serde(default = "splash_dark")]
+    pub background_dark: String,
+}
+
+fn splash_light() -> String {
+    "#ffffff".to_string()
+}
+
+fn splash_dark() -> String {
+    "#121212".to_string()
+}
+
+impl Default for SplashConfig {
+    fn default() -> Self {
+        SplashConfig {
+            enabled: true,
+            background: splash_light(),
+            background_dark: splash_dark(),
+        }
+    }
+}
+
+impl SplashConfig {
+    fn is_default(&self) -> bool {
+        *self == SplashConfig::default()
     }
 }
 
@@ -473,6 +529,12 @@ impl NativeConfig {
                 self.android.min_sdk
             )));
         }
+        check_color("android.splash.background", &self.android.splash.background).map_err(fail)?;
+        check_color(
+            "android.splash.backgroundDark",
+            &self.android.splash.background_dark,
+        )
+        .map_err(fail)?;
 
         if let Some(cookie) = &self.auth.cookie_name {
             check_cookie_name(cookie).map_err(fail)?;
@@ -760,6 +822,21 @@ pub fn check_version(version: &str) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// `#rrggbb`, and nothing else.
+///
+/// The value is written into an Android resource file, where a colour name is
+/// an error several minutes into a Gradle build and anything with a `<` in it
+/// is markup.
+fn check_color(field: &str, color: &str) -> Result<(), String> {
+    let hex = color.strip_prefix('#').unwrap_or("");
+    if hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Ok(());
+    }
+    Err(format!(
+        "`{field}` is `{color}`, and a colour here is six hex digits: `#0a2540`."
+    ))
 }
 
 /// An RFC 6265 cookie name, checked here for the same reason `rahti::auth`

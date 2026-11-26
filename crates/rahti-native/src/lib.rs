@@ -84,8 +84,8 @@ pub use bridge::{BRIDGE_PATH, bridge_route, bridge_script};
 pub use capabilities::{Capability, NativeCommand, commands, is_allowed, is_external_url};
 pub use config::{
     AndroidConfig, AuthConfig, BundleConfig, DatabaseConfig, DatabaseMode, DevelopmentConfig,
-    MIN_ANDROID_SDK, NativeConfig, SCHEMA_VERSION, SecurityConfig, TARGETS, WindowConfig,
-    check_identifier, check_product_name, check_version, default_csp, superseded_csp,
+    MIN_ANDROID_SDK, NativeConfig, SCHEMA_VERSION, SecurityConfig, SplashConfig, TARGETS,
+    WindowConfig, check_identifier, check_product_name, check_version, default_csp, superseded_csp,
 };
 pub use development::{apply_development_env, loopback_database_port};
 pub use error::NativeError;

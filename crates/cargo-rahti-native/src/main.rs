@@ -25,6 +25,7 @@ mod args;
 mod doctor;
 mod icons;
 mod init;
+mod launch_screen;
 mod project;
 mod release_key;
 mod run;
