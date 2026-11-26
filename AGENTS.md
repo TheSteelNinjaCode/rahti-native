@@ -95,6 +95,11 @@ is a rule users read.
     New behaviour is designed for shells generated from now on: no
     compatibility path for an older shell, and no switch that exists only for
     one.
+16. `android.remote` makes the Android package open a hosted application and
+    run no embedded server. That origin is granted no native command and gets
+    `hosted_bridge_script`, which offers none. The bundled start page finds
+    out whether the address answers with a request of its own, not with a
+    command, and tells the launch screen `#offline` when it does not.
 
 ## What lives in the framework, not here
 

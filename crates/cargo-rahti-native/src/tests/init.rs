@@ -630,3 +630,104 @@ fn the_shell_applies_its_settings_before_the_application_starts() {
         "a release must not reference the file"
     );
 }
+
+// ------------------------------------------------------ a hosted application
+
+fn shell_file(remote: Option<&str>, path: &str) -> String {
+    let fixture = Fixture::new();
+    let mut config = NativeConfig::new("My App", "com.example.myapp", "0.1.0", &["android"]);
+    config.android.remote = remote.map(str::to_string);
+    crate::shell::files(&fixture.project(), &config)
+        .into_iter()
+        .find(|file| file.path == path)
+        .unwrap_or_else(|| panic!("{path} is not generated"))
+        .contents
+}
+
+const HOSTED: Option<&str> = Some("https://app.example.com/drive");
+
+#[test]
+fn an_android_package_of_a_hosted_application_starts_no_server() {
+    // The case this exists for: a project on PostgreSQL. A release carries no
+    // database credentials, so the embedded server on a phone would start
+    // against nothing, and the deployment is the real application.
+    let lib = shell_file(HOSTED, "native/src/lib.rs");
+    assert!(
+        lib.contains(
+            "const ANDROID_REMOTE: Option<&str> = Some(\"https://app.example.com/drive\");"
+        ),
+        "{lib}"
+    );
+
+    // Decided before the embedded server is started, and on Android only.
+    let hosted = lib
+        .find("return open_hosted(app.handle(), remote);")
+        .unwrap();
+    let embedded = lib.find("match start(app.handle())").unwrap();
+    assert!(hosted < embedded, "the server starts first");
+    assert!(lib[..hosted].contains("#[cfg(target_os = \"android\")]\n            if let Some"));
+
+    assert!(shell_file(None, "native/src/lib.rs").contains("ANDROID_REMOTE: Option<&str> = None;"));
+}
+
+#[test]
+fn the_hosted_application_is_granted_no_native_command() {
+    // Its pages are served by somebody's deployment, not by this package, so
+    // an XSS there must reach nothing native.
+    let capabilities = shell_file(HOSTED, "native/capabilities/default.json");
+    assert!(!capabilities.contains("example.com"), "{capabilities}");
+    assert!(capabilities.contains("http://127.0.0.1:*"));
+
+    let lib = shell_file(HOSTED, "native/src/lib.rs");
+    let hosted = &lib[lib.find("fn open_hosted").unwrap()..];
+    assert!(hosted.contains("hosted_bridge_script"), "{hosted}");
+    assert!(!hosted[..hosted.find("\n}\n").unwrap()].contains("::bridge_script"));
+}
+
+#[test]
+fn the_start_page_can_ask_whether_the_hosted_application_answers() {
+    let index = shell_file(HOSTED, "native/dist/index.html");
+    assert!(
+        index.contains("data-remote=\"https://app.example.com/drive\""),
+        "{index}"
+    );
+    // No inline script: the page's policy is `script-src 'self'`.
+    assert!(index.contains("<script src=\"start.js\"></script>"));
+    assert_eq!(index.matches("<script").count(), 1);
+
+    // The one request it makes needs the one origin, and nothing wider.
+    let conf = shell_file(HOSTED, "native/tauri.conf.json");
+    assert!(
+        conf.contains("connect-src 'self' ws: http://127.0.0.1:* https://app.example.com;"),
+        "{conf}"
+    );
+    assert!(!shell_file(None, "native/tauri.conf.json").contains("example.com"));
+}
+
+#[test]
+fn the_start_page_says_when_it_cannot_connect_and_tries_again() {
+    let js = shell_file(HOSTED, "native/dist/start.js");
+    // It calls no native command to find out.
+    assert!(!js.contains("__TAURI__"), "{js}");
+    assert!(js.contains("mode: \"no-cors\""));
+    // Back from the application leaves it and does not return here.
+    assert!(js.contains("location.replace(remote)"));
+    // And the launch screen is told to stop waiting.
+    assert!(js.contains("\"#offline\""));
+    assert!(js.contains("addEventListener(\"online\", attempt)"));
+
+    let index = shell_file(None, "native/dist/index.html");
+    assert!(index.contains("data-remote=\"\""), "{index}");
+    assert!(js.contains("if (!remote) return;"));
+}
+
+#[test]
+fn a_policy_without_a_connect_directive_gains_one() {
+    let mut config = NativeConfig::new("My App", "com.example.myapp", "0.1.0", &["android"]);
+    config.android.remote = Some("https://app.example.com:8443".to_string());
+    config.security.csp = "default-src 'self'; script-src 'self'".to_string();
+    assert_eq!(
+        crate::shell::shell_csp(&config),
+        "default-src 'self'; script-src 'self'; connect-src 'self' https://app.example.com:8443"
+    );
+}

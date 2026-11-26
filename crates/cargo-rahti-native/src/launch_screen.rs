@@ -354,6 +354,7 @@ const CLASS_BODY: &str = r#"
 
 import android.app.Activity
 import android.graphics.drawable.ColorDrawable
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -452,6 +453,10 @@ internal class RahtiLaunchScreen private constructor(private val activity: Activ
       // Whatever happened, the application is not left behind its splash.
       SystemClock.uptimeMillis() - started >= MAX_HOLD_MS -> reveal()
       view == null || url == null || url == "about:blank" -> Unit
+      // The bundled start page of a hosted application: it is on its way
+      // somewhere, so the splash stays unless it says it cannot get there.
+      Uri.parse(url).host == START_PAGE_HOST ->
+        if (Uri.parse(url).fragment == "offline") reveal()
       view.progress >= 100 && !waitingForPaint -> {
         waitingForPaint = true
         view.postVisualStateCallback(0, object : WebView.VisualStateCallback() {
@@ -489,6 +494,9 @@ internal class RahtiLaunchScreen private constructor(private val activity: Activ
     private const val POLL_MS = 50L
     private const val PAINT_SETTLE_MS = 120L
     private const val FADE_MS = 300L
+
+    /** The origin Tauri serves `dist/` from on Android. */
+    private const val START_PAGE_HOST = "tauri.localhost"
 
     /** From `MainActivity.onCreate`, before the first frame. */
     fun install(activity: Activity) {

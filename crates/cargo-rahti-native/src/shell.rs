@@ -59,7 +59,9 @@ pub fn files(project: &Project, config: &NativeConfig) -> Vec<File> {
         File::new("native/permissions/rahti-native.json", permissions()),
         File::new("native/src/lib.rs", lib_rs(project, config)),
         File::new("native/src/main.rs", main_rs(project)),
-        File::new("native/dist/index.html", DIST_INDEX.to_string()),
+        File::new("native/dist/index.html", dist_index(config)),
+        File::new("native/dist/start.css", DIST_CSS.to_string()),
+        File::new("native/dist/start.js", DIST_JS.to_string()),
         File::new("native/.gitignore", GITIGNORE.to_string()),
         File::new("native/README.md", readme(config)),
     ]
@@ -340,9 +342,43 @@ fn tauri_conf(config: &NativeConfig) -> String {
         // placeholder document and the application's pages cannot be governed
         // by two different rules. The one that reaches a page is the header —
         // see `rahti_native::security_headers`.
-        csp = json(&config.security.csp),
+        csp = json(&shell_csp(config)),
         min_sdk = config.android.min_sdk,
     )
+}
+
+/// The policy for the shell's own bundled page.
+///
+/// The application's policy, and — when the Android package opens a hosted
+/// application — one more `connect-src`: the bundled start page asks that
+/// address whether it answers before it goes there. Nothing else on that page
+/// reaches the network, and the application's own pages are governed by the
+/// header their server sends, not by this.
+pub(crate) fn shell_csp(config: &NativeConfig) -> String {
+    let Some(origin) = config.android.remote_origin() else {
+        return config.security.csp.clone();
+    };
+
+    let mut found = false;
+    let mut directives: Vec<String> = config
+        .security
+        .csp
+        .split(';')
+        .map(str::trim)
+        .filter(|directive| !directive.is_empty())
+        .map(|directive| {
+            if directive.split_whitespace().next() == Some("connect-src") {
+                found = true;
+                format!("{directive} {origin}")
+            } else {
+                directive.to_string()
+            }
+        })
+        .collect();
+    if !found {
+        directives.push(format!("connect-src 'self' {origin}"));
+    }
+    directives.join("; ")
 }
 
 /// The application's own commands, as a Tauri permission.
@@ -449,6 +485,13 @@ fn lib_rs(project: &Project, config: &NativeConfig) -> String {
 //!
 //! Steps 4 and 7 in that order are the startup race, and the reason the WebView
 //! never opens on a port nothing is listening to.
+//!
+//! ## A hosted application on Android
+//!
+//! With `android.remote` in rahti.native.json, the Android package runs none
+//! of that: it opens the hosted application, by way of the bundled start page
+//! in `dist/`, which goes there once it answers and says so when it does not.
+//! That origin is granted no native command.
 
 use std::time::Duration;
 
@@ -509,6 +552,12 @@ const DATABASE_MODE: DatabaseMode = DatabaseMode::{database_mode};
 /// on the machine. From `security.loopbackToken` in rahti.native.json.
 const LOOPBACK_TOKEN: bool = {loopback_token};
 
+/// Where the application is hosted, for an Android package that opens it
+/// rather than running the application inside itself. From `android.remote`
+/// in rahti.native.json.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+const ANDROID_REMOTE: Option<&str> = {remote};
+
 /// Held for the life of the process so the server can be stopped when the last
 /// window closes.
 struct Server(std::sync::Mutex<Option<RunningServer>>);
@@ -532,6 +581,10 @@ pub fn run() {{
             choose_file
         ])
         .setup(|app| {{
+            #[cfg(target_os = "android")]
+            if let Some(remote) = ANDROID_REMOTE {{
+                return open_hosted(app.handle(), remote);
+            }}
             match start(app.handle()) {{
                 Ok(server) => {{
                     let url = server.base_url();
@@ -659,14 +712,64 @@ fn open_window(app: &tauri::AppHandle, base_url: &str) -> tauri::Result<()> {{
             if target.starts_with("http://127.0.0.1:") {{
                 return true;
             }}
-            if rahti_native::is_external_url(&target) {{
-                let _ =
-                    tauri_plugin_opener::OpenerExt::opener(&handle).open_url(target, None::<&str>);
-            }}
+            open_in_browser(&handle, target);
             false
         }})
         .build()?;
 
+    Ok(())
+}}
+
+/// Hand an ordinary web URL to the user's own browser, and nothing else to
+/// anything.
+///
+/// From its own thread. Android asks about a navigation from its UI thread,
+/// and the opener waits for a reply only that thread can deliver: called
+/// inline, the application stops responding the moment a link is tapped.
+fn open_in_browser(app: &tauri::AppHandle, url: String) {{
+    if !rahti_native::is_external_url(&url) {{
+        return;
+    }}
+    let app = app.clone();
+    std::thread::spawn(move || {{
+        let _ = tauri_plugin_opener::OpenerExt::opener(&app).open_url(url, None::<&str>);
+    }});
+}}
+
+/// The Android package of a hosted application: no embedded server, and a
+/// window on the bundled start page.
+///
+/// The start page (`dist/index.html`) asks the hosted address whether it
+/// answers and only then goes there, so a phone with no connection shows a
+/// screen that says so and tries again, not the WebView's own error page.
+///
+/// The hosted pages get the bridge without a single command on it — the
+/// capability file grants that origin none — which leaves what needs no
+/// command: links that ask for a new window, and pull to refresh.
+#[cfg(target_os = "android")]
+fn open_hosted(app: &tauri::AppHandle, remote: &str) -> Result<(), Box<dyn std::error::Error>> {{
+    let url: tauri::Url = remote.parse()?;
+    let origin = url.origin();
+    let handle = app.clone();
+
+    WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+        .title(WINDOW_TITLE)
+        .initialization_script(&rahti_native::hosted_bridge_script(
+            Platform::current().name(),
+            VERSION,
+        ))
+        // The hosted application and the start page stay in this window.
+        // Anywhere else opens in the phone's browser, so the window never
+        // runs somebody else's HTML.
+        .on_navigation(move |target| {{
+            // The start page's own origin: `http://tauri.localhost`.
+            if target.origin() == origin || target.host_str() == Some("tauri.localhost") {{
+                return true;
+            }}
+            open_in_browser(&handle, target.to_string());
+            false
+        }})
+        .build()?;
     Ok(())
 }}
 
@@ -801,6 +904,10 @@ async fn choose_file(app: tauri::AppHandle, extensions: Option<Vec<String>>) -> 
             rahti_native::DatabaseMode::Remote => "Remote",
         },
         loopback_token = config.security.loopback_token,
+        remote = match &config.android.remote {
+            Some(remote) => format!("Some({})", json(remote)),
+            None => "None".to_string(),
+        },
         app_lib = project.lib,
     )
 }
@@ -819,17 +926,162 @@ fn main() {
 }
 "#;
 
-/// The placeholder document Tauri bundles.
+/// The page Tauri bundles, and the Android start page of a hosted application.
 ///
-/// Tauri's bundler requires a frontend directory, and this project's frontend
-/// is served by the embedded server rather than shipped as files — so the
-/// directory exists, holds one page, and is never shown: the window is created
-/// on the loopback URL.
+/// Tauri's bundler requires a frontend directory. A package that runs the
+/// application inside itself never shows it: the window is created on the
+/// loopback URL. With `android.remote` set, an Android launch starts here —
+/// `start.js` asks the hosted address whether it answers, goes there when it
+/// does, and shows the "can't connect" screen with a retry when it does not.
+///
+/// The address is an attribute rather than a line of script so that the
+/// script is the same file in every project, and the policy that governs this
+/// page needs no inline script.
+fn dist_index(config: &NativeConfig) -> String {
+    // Validated to plain URL characters, and escaped anyway.
+    let remote = config
+        .android
+        .remote
+        .as_deref()
+        .unwrap_or("")
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;");
+    DIST_INDEX.replace("__REMOTE__", &remote)
+}
+
 const DIST_INDEX: &str = r#"<!doctype html>
+<html lang="en">
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>Starting…</title>
-<p>Starting…</p>
+<link rel="stylesheet" href="start.css">
+<body data-remote="__REMOTE__">
+<main id="connecting">
+  <div class="spinner" role="status" aria-label="Connecting"></div>
+</main>
+<main id="offline" hidden>
+  <h1>Can't connect</h1>
+  <p>Check your internet connection and try again.</p>
+  <button id="retry" type="button">Try again</button>
+</main>
+<script src="start.js"></script>
 "#;
+
+const DIST_CSS: &str = r#"/* The Android start page of a hosted application. See index.html. */
+html, body { height: 100%; margin: 0; }
+body {
+  font: 16px/1.5 system-ui, sans-serif;
+  background: Canvas;
+  color: CanvasText;
+  -webkit-tap-highlight-color: transparent;
+}
+[hidden] { display: none !important; }
+main {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0 32px;
+  text-align: center;
+}
+h1 { margin: 0 0 8px; font-size: 1.25rem; }
+p { margin: 0 0 28px; opacity: 0.7; }
+button {
+  font: inherit;
+  font-weight: 600;
+  min-width: 160px;
+  padding: 12px 24px;
+  border: 0;
+  border-radius: 999px;
+  background: CanvasText;
+  color: Canvas;
+}
+button:disabled { opacity: 0.6; }
+.spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  opacity: 0.5;
+  animation: turn 0.9s linear infinite;
+}
+@keyframes turn { to { transform: rotate(360deg); } }
+"#;
+
+const DIST_JS: &str = r##"// The Android start page of a hosted application: go to it once it answers,
+// and show the "can't connect" screen until then.
+//
+// A static page bundled in the package, outside the application and outside
+// PulsePoint. It calls no native command: whether the address answers is a
+// request the page can make itself.
+(function () {
+  "use strict";
+
+  var remote = document.body.getAttribute("data-remote");
+  // No hosted address: this package runs the application inside itself and
+  // this page is never shown.
+  if (!remote) return;
+
+  var connecting = document.getElementById("connecting");
+  var offline = document.getElementById("offline");
+  var retry = document.getElementById("retry");
+  var busy = false;
+
+  // Any answer at all means there is something to go to. The response is
+  // opaque and is not read; a refused connection, no network and no answer
+  // in time are the cases this is here to catch.
+  function reachable() {
+    var controller = new AbortController();
+    var timer = setTimeout(function () { controller.abort(); }, 8000);
+    return fetch(remote, {
+      mode: "no-cors",
+      cache: "no-store",
+      credentials: "omit",
+      signal: controller.signal,
+    }).then(
+      function () { clearTimeout(timer); return true; },
+      function () { clearTimeout(timer); return false; }
+    );
+  }
+
+  function attempt() {
+    if (busy) return;
+    busy = true;
+    retry.disabled = true;
+    retry.textContent = "Connecting…";
+    reachable().then(function (up) {
+      if (up) {
+        // Replace, so Back from the application leaves it and does not come
+        // back here.
+        location.replace(remote);
+        return;
+      }
+      connecting.hidden = true;
+      offline.hidden = false;
+      // Tells the launch screen to stop waiting for the application and show
+      // this screen now (RahtiLaunchScreen.kt).
+      if (location.hash !== "#offline") history.replaceState(null, "", "#offline");
+      retry.disabled = false;
+      retry.textContent = "Try again";
+      busy = false;
+    });
+  }
+
+  retry.addEventListener("click", attempt);
+  window.addEventListener("online", attempt);
+  // A network comes back without an `online` event too (a captive portal, a
+  // server restart), so look again now and then while this screen is up.
+  setInterval(function () {
+    if (!offline.hidden) attempt();
+  }, 10000);
+
+  attempt();
+})();
+"##;
 
 const GITIGNORE: &str = r#"# Build output.
 /target
@@ -881,7 +1133,7 @@ cargo rahti native init --force
 | `src/lib.rs` | The shell: paths, server, window, and the five native commands. |
 | `src/main.rs` | The desktop binary. Android calls the library instead. |
 | `icons/` | **The Rahti mark until you replace it.** Do that before you ship anything. |
-| `dist/` | A page that is never shown; Tauri's bundler requires a frontend directory. |
+| `dist/` | The page Tauri bundles. With `android.remote` set it is what an Android launch starts on: it goes to the hosted application once that answers, and is the "can't connect" screen until then. Otherwise it is never shown. |
 
 ## Icons
 

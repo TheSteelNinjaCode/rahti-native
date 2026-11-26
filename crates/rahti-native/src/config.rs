@@ -153,6 +153,29 @@ pub struct AndroidConfig {
     /// that never asked about it does not grow a section.
     #[serde(default, skip_serializing_if = "SplashConfig::is_default")]
     pub splash: SplashConfig,
+
+    /// The hosted application the Android package opens instead of running
+    /// the application inside itself: `https://app.example.com`.
+    ///
+    /// For a project whose database is somewhere else. A release package
+    /// carries no database credentials, so a phone running the embedded
+    /// server would start against nothing; a phone opening the deployment
+    /// gets the real thing. The package then starts on a bundled page that
+    /// goes there once it answers, and says so when it does not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
+}
+
+impl AndroidConfig {
+    /// The origin of [`AndroidConfig::remote`]: scheme, host and port.
+    pub fn remote_origin(&self) -> Option<&str> {
+        let remote = self.remote.as_deref()?;
+        let authority_end = remote
+            .get(8..)
+            .and_then(|rest| rest.find('/'))
+            .map_or(remote.len(), |at| at + 8);
+        Some(&remote[..authority_end])
+    }
 }
 
 impl Default for AndroidConfig {
@@ -160,6 +183,7 @@ impl Default for AndroidConfig {
         AndroidConfig {
             min_sdk: MIN_ANDROID_SDK,
             splash: SplashConfig::default(),
+            remote: None,
         }
     }
 }
@@ -535,6 +559,9 @@ impl NativeConfig {
             &self.android.splash.background_dark,
         )
         .map_err(fail)?;
+        if let Some(remote) = &self.android.remote {
+            check_remote(remote).map_err(fail)?;
+        }
 
         if let Some(cookie) = &self.auth.cookie_name {
             check_cookie_name(cookie).map_err(fail)?;
@@ -820,6 +847,53 @@ pub fn check_version(version: &str) -> Result<(), String> {
                 "`version` is `{version}`, and `{part}` is too large."
             ));
         }
+    }
+    Ok(())
+}
+
+/// An `https` address with a host and, at most, a port and a path.
+///
+/// `https` only: Android refuses cleartext to anything but the loopback
+/// server, and a session over `http` is a session anybody on the network can
+/// read. Nothing after the path either — the value is written into a page and
+/// a policy, and a query string there is a place for a secret to end up.
+fn check_remote(remote: &str) -> Result<(), String> {
+    let refuse = |why: &str| {
+        Err(format!(
+            "`android.remote` is `{remote}`, and {why}.
+               It is where the application is hosted: `https://app.example.com`."
+        ))
+    };
+
+    let Some(rest) = remote.strip_prefix("https://") else {
+        return refuse("it has to start with `https://`");
+    };
+    let (authority, path) = match rest.find('/') {
+        Some(at) => rest.split_at(at),
+        None => (rest, ""),
+    };
+    let (host, port) = match authority.split_once(':') {
+        Some((host, port)) => (host, Some(port)),
+        None => (authority, None),
+    };
+
+    let host_ok = !host.is_empty()
+        && !host.starts_with(['.', '-'])
+        && !host.ends_with(['.', '-'])
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
+    if !host_ok {
+        return refuse("that is not a host name");
+    }
+    if port.is_some_and(|port| port.parse::<u16>().is_err()) {
+        return refuse("that is not a port");
+    }
+    if !path
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "/._~-".contains(c))
+    {
+        return refuse("only a plain path may follow the host: no query, no fragment");
     }
     Ok(())
 }

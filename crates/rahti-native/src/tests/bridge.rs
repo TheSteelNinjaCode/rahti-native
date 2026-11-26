@@ -85,6 +85,18 @@ fn only_pages_using_popovers_warn_about_an_old_webview() {
 }
 
 #[test]
+fn a_hosted_page_is_offered_no_native_command() {
+    // The hosted origin is granted none, so a bridge that said otherwise
+    // would send a page down a path that is refused.
+    let js = hosted_bridge_script("android", "1.2.3");
+    assert!(js.contains("var ALLOWED = [];"), "{js}");
+    assert!(js.contains("var CAPABILITIES = [];"), "{js}");
+    // What needs no command still works there.
+    assert!(js.contains("data-rahti-pull-to-refresh"));
+    assert!(js.contains("platform: \"android\""));
+}
+
+#[test]
 fn pull_to_refresh_is_for_the_pages_that_ask_for_it() {
     // Not on everywhere: a pull on a half-filled form would throw the form
     // away. So nothing happens until an element opts in.

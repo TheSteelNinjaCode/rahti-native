@@ -80,7 +80,7 @@ const DEV_ENV: &str = "RAHTI_DEV";
 #[path = "tests/mod.rs"]
 mod tests;
 
-pub use bridge::{BRIDGE_PATH, bridge_route, bridge_script};
+pub use bridge::{BRIDGE_PATH, bridge_route, bridge_script, hosted_bridge_script};
 pub use capabilities::{Capability, NativeCommand, commands, is_allowed, is_external_url};
 pub use config::{
     AndroidConfig, AuthConfig, BundleConfig, DatabaseConfig, DatabaseMode, DevelopmentConfig,

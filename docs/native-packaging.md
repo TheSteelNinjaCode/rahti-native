@@ -413,6 +413,47 @@ full access for everyone who downloads it. So a `remote` release starts with no
 database at all, and `doctor --release` says so. Its backend has to be hosted on
 a public address.
 
+### A hosted application on Android
+
+Once the backend is hosted, the Android package can simply open it:
+
+```json
+"android": { "minSdk": 24, "remote": "https://app.example.com" }
+```
+
+With `remote` set, an Android build runs no embedded server. It opens the
+hosted application in the WebView, which is the same pages, the same sessions
+and the real database. The address is `https` and nothing else: Android refuses
+cleartext to everything but the loopback server, and a session over `http` is
+one anybody on the network can read.
+
+**It starts on a page that can say "can't connect".** A phone is offline more
+often than a desktop, and a WebView pointed at an address that does not answer
+shows its own error page. So the window opens on the bundled `native/dist/`
+start page, which asks the address whether it answers:
+
+- it answers: the page goes there, and Back from the application leaves it;
+- it does not: the page says so, with a **Try again** button, and tries again by
+  itself when the network returns and every ten seconds until it does.
+
+The launch screen stays up across the start page, so a launch with a
+connection is the splash and then the application, not a spinner in between.
+
+The start page is yours, like the rest of `native/`: its words are in
+`dist/index.html` and its look in `dist/start.css`.
+
+What this does not cover is a page that fails to load *later*, once the
+application is open. The WebView shows its own error page for that, and a
+service worker in the application is the way to replace it.
+
+**The hosted pages get no native command.** They are served by a deployment,
+not by this package, so the capability file grants that origin nothing and
+`window.rahtiNative.has(...)` answers `false` for everything: a page takes its
+web fallback. Links to other sites still open in the phone's browser, downloads
+are still saved, and pull to refresh still works where a page asks for it.
+
+Windows is unaffected and keeps running the application inside the package.
+
 ## The session key
 
 `rahti::auth` signs its session cookie with `AUTH_SECRET`. A packaged

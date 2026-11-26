@@ -246,3 +246,19 @@ fn the_theme_extends_materials_when_the_manifest_names_none() {
     );
     assert_eq!(application_theme(MANIFEST), "Theme.demo_native");
 }
+
+#[test]
+fn the_splash_stays_over_the_start_page_of_a_hosted_application() {
+    // Otherwise a launch is the splash, then a spinner, then the application:
+    // two fades. The start page says `#offline` when it has nowhere to go.
+    let class = class("com.example.app");
+    let start = class
+        .find("START_PAGE_HOST ->")
+        .expect("the start page case");
+    let painted = class.find("view.progress >= 100").unwrap();
+    assert!(start < painted, "the start page is revealed as a page");
+    assert!(
+        class.contains("fragment == \"offline\") reveal()"),
+        "{class}"
+    );
+}

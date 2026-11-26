@@ -138,8 +138,9 @@ pub(crate) fn release_database(config: &NativeConfig, release: bool) -> Option<F
              Development builds take it from `.env`. A release must not: anything in a\n   \
              package can be read back out of it, and a database password in a public\n   \
              installer is full access for everyone who downloads it.\n   \
-             Host the backend on a public address, or set `database.mode` to `sqlite-local`\n   \
-             for data that belongs on the device.",
+             Host the backend on a public address and name it in `android.remote`, which\n   \
+             the Android package then opens; or set `database.mode` to `sqlite-local` for\n   \
+             data that belongs on the device.",
         )
     })
 }

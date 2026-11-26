@@ -139,6 +139,51 @@ fn one_launch_colour_can_be_set_without_the_others() {
 }
 
 #[test]
+fn the_android_package_can_open_the_hosted_application() {
+    let mut config = valid();
+    assert_eq!(config.android.remote, None);
+    assert!(!config.to_json().contains("remote\""));
+
+    for good in [
+        "https://app.example.com",
+        "https://app.example.com/",
+        "https://app.example.com:8443/drive",
+    ] {
+        config.android.remote = Some(good.to_string());
+        assert!(config.validate().is_ok(), "{good}");
+    }
+    assert_eq!(
+        config.android.remote_origin(),
+        Some("https://app.example.com:8443")
+    );
+
+    let again = NativeConfig::parse(&config.to_json()).unwrap();
+    assert_eq!(config, again);
+}
+
+#[test]
+fn a_hosted_address_that_is_not_plain_https_is_refused() {
+    // Cleartext is a session anybody on the network can read, and the value
+    // is written into a page and a policy.
+    for bad in [
+        "http://app.example.com",
+        "app.example.com",
+        "https://",
+        "https://user:pass@app.example.com",
+        "https://app.example.com/?token=1",
+        "https://app.example.com/#x",
+        "https://app.example.com/\"><script>",
+        "https://app.example.com:port",
+        "https://app example.com",
+    ] {
+        let mut config = valid();
+        config.android.remote = Some(bad.to_string());
+        let error = config.validate().expect_err(bad);
+        assert!(error.to_string().contains("android.remote"), "{error}");
+    }
+}
+
+#[test]
 fn a_launch_colour_that_is_not_six_hex_digits_is_refused() {
     // It is written into an Android resource file: a colour name fails a
     // Gradle build minutes in, and markup would be markup.

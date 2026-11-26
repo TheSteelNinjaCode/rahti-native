@@ -73,6 +73,11 @@ pub fn json() -> String {
           "minimum": {min_sdk},
           "description": "The lowest Android API level the package installs on. Tauri 2 needs at least {min_sdk}."
         }},
+        "remote": {{
+          "type": "string",
+          "pattern": "^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9/._~-]*)?$",
+          "description": "Where the application is hosted, as `https://app.example.com`. When set, the Android package opens it instead of running the application inside itself, starting on a bundled page that says so when it cannot connect. For a project whose database is somewhere else: a release package carries no database credentials."
+        }},
         "splash": {{
           "type": "object",
           "additionalProperties": false,

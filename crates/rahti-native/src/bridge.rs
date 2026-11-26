@@ -47,12 +47,32 @@ pub const BRIDGE_PATH: &str = "/__rahti/native.js";
 /// `platform` is the value `pp.native.platform` reports; the generated shell
 /// passes [`crate::Platform::current`].
 pub fn bridge_script(platform: &str, version: &str) -> String {
-    let capabilities = json_array(&crate::capabilities::capability_names());
     let commands: Vec<&str> = crate::capabilities::commands()
         .iter()
         .map(|c| c.name)
         .collect();
-    let allowed = json_array(&commands);
+    script(
+        platform,
+        version,
+        &commands,
+        &crate::capabilities::capability_names(),
+    )
+}
+
+/// The script for a page that is not the package's own: the hosted
+/// application an Android package opens when `android.remote` is set.
+///
+/// That origin is granted no native command, so this bridge offers none:
+/// `has` answers `false` for everything and a page takes its web fallback,
+/// which is the truth. What is left is what needs no command — links that
+/// ask for a new window, and pull to refresh.
+pub fn hosted_bridge_script(platform: &str, version: &str) -> String {
+    script(platform, version, &[], &[])
+}
+
+fn script(platform: &str, version: &str, commands: &[&str], capabilities: &[&str]) -> String {
+    let capabilities = json_array(capabilities);
+    let allowed = json_array(commands);
     let platform = json_string(platform);
     let version = json_string(version);
 
