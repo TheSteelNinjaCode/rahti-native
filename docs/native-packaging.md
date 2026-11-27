@@ -339,6 +339,21 @@ The launch screen never waits more than ten seconds, whatever the page does.
 A launcher activity that already names a theme of its own is reported, not
 edited.
 
+### Android and the Back button
+
+The system Back button and the Back gesture walk the WebView's history, the
+same history the browser's Back button walks: each press goes to the previous
+entry, and a press with nothing left to go back to leaves the application.
+The package adds nothing on top.
+
+So a part of a page that Back should close — a drawer, a sheet, a menu — has
+to own a history entry while it is open. It pushes one on the page's own URL
+when it opens, closes when a `popstate` takes the page back off it, and takes
+its entry back off when it is closed any other way. PulsePoint does not fetch
+the page again for an entry of the document already on screen, so the page
+stays mounted. The rahti-ui `Drawer` works this way; a `Dialog` or `Sheet`
+does not yet, and Back leaves a page with one open.
+
 ### Android and downloads
 
 An Android WebView drops a download unless the application gives it somewhere
