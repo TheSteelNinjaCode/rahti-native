@@ -1,12 +1,14 @@
-//! `pp.native` — the browser side of the capability bridge.
+//! `window.rahtiNative` — the browser side of the capability bridge.
 //!
 //! ## Why this is a separate script
 //!
 //! PulsePoint ships as a prebuilt minified bundle, and that bundle is not
 //! edited: not by hand, not by a build step, not to add a namespace. So the
-//! native surface arrives beside it instead. This script attaches `native` to
-//! `pp` the moment the bundle publishes it, and PulsePoint itself is byte for
-//! byte the file a web project serves.
+//! native surface arrives beside it instead, as the global
+//! `window.rahtiNative`, and PulsePoint itself is byte for byte the file a web
+//! project serves. The script also attaches the same object as `pp.native`
+//! where it can, but a reactive block cannot see that one (its `pp` is a
+//! scoped object PulsePoint supplies), so nothing may depend on it.
 //!
 //! It is framework-owned — generated from this crate rather than written into
 //! the application's `public/` — so it cannot drift from [`crate::commands`],
@@ -14,13 +16,15 @@
 //!
 //! ## The one rule for a page that uses it
 //!
-//! **The same page has to work as a website.** `pp.native` is undefined in a
-//! browser, and a page that assumed otherwise is a page the project's web
-//! deployment 500s on. Every use is guarded:
+//! **The same page has to work as a website.** `window.rahtiNative` is
+//! undefined in a browser, and a page that assumed otherwise is a page the
+//! project's web deployment breaks on. Every use is guarded. `has` takes a
+//! capability name (hyphens), `invoke` a command name (underscores):
 //!
 //! ```javascript
-//! if (pp.native?.has("choose-file")) {
-//!   const file = await pp.native.invoke("choose_file", { extensions: ["png"] });
+//! const native = window.rahtiNative;
+//! if (native && native.has("choose-file")) {
+//!   const file = await native.invoke("choose_file", { extensions: ["png"] });
 //! } else {
 //!   fileInput.click();   // the web does this perfectly well already
 //! }
@@ -44,7 +48,7 @@ pub const BRIDGE_PATH: &str = "/__rahti/native.js";
 
 /// The script, with the current allowlist compiled into it.
 ///
-/// `platform` is the value `pp.native.platform` reports; the generated shell
+/// `platform` is the value `window.rahtiNative.platform` reports; the generated shell
 /// passes [`crate::Platform::current`].
 pub fn bridge_script(platform: &str, version: &str) -> String {
     let commands: Vec<&str> = crate::capabilities::commands()

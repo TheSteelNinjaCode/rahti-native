@@ -45,15 +45,20 @@ schedule.
 ```bash
 cargo rahti native init --identifier com.example.myapp --windows --android
 cargo rahti native doctor
-cargo rahti native dev   --target windows
-cargo rahti native build --target windows
-cargo rahti native build --target android --format apk
-cargo rahti native build --target android --format aab
+cargo rahti native dev     --target windows
+cargo rahti native build   --target windows
+cargo rahti native build   --target android --format apk
+cargo rahti native build   --target android --format aab
+cargo rahti native build   --target android --debug --device emulator
+cargo rahti native status  --wait
+cargo rahti native devices
 ```
 
 `cargo rahti native …` is forwarded by `cargo-rahti`; `cargo rahti-native …`
-reaches this tool directly through cargo's own subcommand dispatch. `build`
-prints the absolute path of every artifact it produced.
+reaches this tool directly through cargo's own subcommand dispatch. Every
+package lands in `native/packages/<windows|android>/<release|debug>/`, and
+`native/.rahti/build.json` describes the current or last build for whatever
+runs next, an agent included.
 
 `doctor` checks only what the named target needs, installs nothing, and each
 failure says what is missing, why it is needed, and the command that supplies
@@ -63,8 +68,8 @@ it.
 
 | Crate | Role |
 | --- | --- |
-| `rahti-native` | The platform-neutral runtime: packaged paths, the loopback-only embedded server, the per-installation session key, the launch gate, the security headers, and the `pp.native` bridge. **No Tauri dependency**, so all of it tests in an ordinary `cargo test`. |
-| `cargo-rahti-native` | The CLI: `init`, `doctor`, `dev`, `build`. Generates the application-owned Tauri shell under `native/`. No Tauri dependency either — it delegates. |
+| `rahti-native` | The platform-neutral runtime: packaged paths, the loopback-only embedded server, the per-installation session key, the launch gate, the security headers, and the `window.rahtiNative` bridge. **No Tauri dependency**, so all of it tests in an ordinary `cargo test`. |
+| `cargo-rahti-native` | The CLI: `init`, `doctor`, `icon`, `dev`, `build`, `status`, `devices`, `emulator`. Generates the application-owned Tauri shell under `native/`. No Tauri dependency either — it delegates. |
 
 ## What your application has to expose
 
@@ -89,8 +94,8 @@ document `cargo rahti new` ships into a project's `docs/conventions/`.
 
 ## Status
 
-Early — `0.0.3`. It has its own release line rather
-than tracking the framework's: the two are separate installs and you upgrade
+Early: the version is in the workspace `Cargo.toml`. It has its own release
+line rather than tracking the framework's: the two are separate installs and you upgrade
 them separately. See [`PUBLISHING.md`](PUBLISHING.md).
 
 ## License

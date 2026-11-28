@@ -17,9 +17,26 @@ is a rule users read.
 - `crates/rahti-native/` — the platform-neutral runtime. Packaged paths, the
   loopback embedded server, the per-installation session key, the launch gate,
   the security headers, `rahti.native.json`, the capability allowlist, the
-  `pp.native` bridge script.
+  `window.rahtiNative` bridge script.
 - `crates/cargo-rahti-native/` — the CLI: `init`, `doctor`, `icon`, `dev`,
-  `build`, and the generated Tauri shell templates.
+  `build`, `status`, `devices`, `emulator`, and the generated Tauri shell
+  templates.
+
+### Where things are in the CLI
+
+| Module | What it owns |
+| --- | --- |
+| `args.rs` | Every command and flag. Hand-parsed; `main.rs` holds the `--help` text, which must list the same flags. |
+| `init.rs`, `shell.rs` | `init`, and every generated file: `native/` templates, including its README and `.gitignore`. |
+| `doctor.rs` | Prerequisite checks, `--json`, and where the SDK, NDK, JDK, `adb` and `cargo tauri` are found. |
+| `run.rs` | `dev` and `build`: the Android patches (with `launch_screen.rs`, `downloads.rs`), signing, the build's environment, and copying packages to `native/packages/`. |
+| `progress.rs` | `build.json` and `build.log` while a build runs, the concurrent-build guard, `status`, and the piped child output. |
+| `devices.rs` | `devices`, `emulator`, and turning `--device` (serial, AVD or `emulator`) into a ready serial. |
+| `release_key.rs` | The machine's own Android release key, outside the project. |
+| `icons.rs` | `icon`. |
+| `schema.rs` | `rahti.native.schema.json`. |
+
+Tests live in `src/tests/`, one file per module.
 
 ## Non-Negotiable Conventions
 
@@ -45,8 +62,11 @@ is a rule users read.
 7. The native command allowlist stays short, and nothing on it runs a program
    or reads a path the page names. An XSS in a native shell reaches everything
    the bridge reaches, so a command has to be safe for a page that has been
-   compromised. Adding one means the Rust allowlist *and* the generated Tauri
-   capability file.
+   compromised. Adding one means three places: the `#[tauri::command]` in the
+   shell, `rahti_native::commands()`, and the generated Tauri capability file.
+   A page calls `window.rahtiNative.has("<capability>")` (hyphens) and
+   `window.rahtiNative.invoke("<command>")` (underscores); `pp.native` is
+   attached too but a reactive block cannot see it, so nothing documents it.
 8. `native/` in a user's project is **theirs**. `init` records a hash per
    generated file, regenerates one whose hash still matches, and leaves an
    edited one alone and reports it. `--force` is the only way to take one back,
@@ -61,17 +81,21 @@ is a rule users read.
 10. The default Content-Security-Policy is `script-src 'self'` with
     `require-trusted-types-for 'script'; trusted-types pulsepoint`, the policy
     a Rahti web deployment sends. PulsePoint runs only the client registry the
-    application compiled, so nothing needs `'unsafe-eval'` or
-    `'unsafe-inline'`, and `NativeConfig::validate` refuses both: either lets
-    an XSS run script that reaches the command bridge.
+    application compiled, so no script needs `'unsafe-eval'` or
+    `'unsafe-inline'`, and `NativeConfig::validate` refuses both in
+    `script-src`: either lets an XSS run script that reaches the command
+    bridge. `style-src 'unsafe-inline'` is in the default, because a `style`
+    attribute needs it, and runs nothing.
 11. An application's `public/` is compiled into the shell's binary and written
     to internal storage on first launch. Android's package resources are zip
     entries and Tauri reports their directory as the URI `asset://localhost/`,
     which no file server can open — serving them from `resource_dir()` 404s
     every asset on every device.
-12. Android needs six patches applied to the Tauri-generated project on
+12. Android needs seven patches applied to the Tauri-generated project on
     **every** build, because `gen/android` is regenerated rather than reviewed:
-    the loopback network-security configuration, the release signing wiring,
+    the loopback network-security configuration, the launcher icons from
+    `native/icons/android` (the template's own otherwise win), the release
+    signing wiring,
     the product name in `strings.xml`, the system-bar insets in
     `MainActivity.kt` (edge-to-edge otherwise puts the page under the status
     bar, where it cannot be tapped), the launch screen (`launch_screen.rs`:
@@ -83,20 +107,31 @@ is a rule users read.
     Kotlin these patches need goes in a file of this tool's own beside
     `MainActivity.kt`, and the activity gains one line that calls it.
 13. Agents run this tool as often as people do, and usually keep only the end of
-    a build's output. So every command ends on its own: nothing an agent needs
-    may require a session that stays running, and `dev` is not the only way onto
-    a device. What a command concludes is available without reading a terminal:
-    `doctor --json` for prerequisites, `native/.rahti/build.json` for a build.
-    Every package is copied to `native/packages/<target>/<profile>/` as
-    `<product>-<version>-<variant>[-debug].<ext>`, and that is the only path
-    printed, recorded and installed from.
-    Report what this run produced and nothing older, and say what succeeded
-    badly — warnings are printed even when nothing blocks the build.
-    `build.json` is written when a build *starts* (`state: running`, `pid`,
-    `phase`) and `status --wait` waits on it. A child's output is piped
-    through `progress::run_logged`, never inherited by `build`: on Windows a
-    Gradle daemon started under an inherited pipe keeps the caller's pipe open
-    for hours, and the caller never sees the build end.
+    a build's output. So:
+    - Every command ends on its own. Nothing an agent needs may require a
+      session that stays running; `build --device` is the way onto a device,
+      and `dev` is the one that stays.
+    - What a command concludes is readable without a terminal: `doctor
+      --json`, `devices --json`, `status --json`, and
+      `native/.rahti/build.json`, which is written when a build *starts*
+      (`state: running`, `pid`, `phase`) and finished with each phase's
+      seconds. `status --wait` waits on it. A second build of a project is
+      refused while one runs.
+    - The full output goes to `native/.rahti/build.log`; a failure prints its
+      last lines again, and the last line of every build is its verdict and
+      timing.
+    - A child's output is piped through `progress::run_logged`, never
+      inherited by `build`: on Windows a Gradle daemon started under an
+      inherited pipe keeps the caller's pipe open for hours, and the caller
+      never sees the build end.
+    - Every package is copied to `native/packages/<target>/<profile>/` as
+      `<product>-<version>-<variant>[-debug].<ext>`, and that is the only path
+      printed, recorded and installed from.
+    - Report what this run produced and nothing older, and say what succeeded
+      badly: warnings are printed even when nothing blocks the build.
+    - A new flag or field is documented in the same change, in `--help`, in
+      `docs/native-packaging.md`, and in the generated `native/README.md`
+      where a user's agent would look.
 14. `cargo-rahti-native` has no image dependency. `icon` writes SVG and lets
     `cargo tauri icon` draw it.
 15. A default is what most applications need, on without being asked for.

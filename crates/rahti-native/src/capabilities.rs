@@ -37,9 +37,9 @@ pub enum Capability {
 /// One entry in the bridge allowlist.
 #[derive(Debug, Clone, Copy)]
 pub struct NativeCommand {
-    /// What `pp.native.invoke` names.
+    /// What `window.rahtiNative.invoke` names: underscores.
     pub name: &'static str,
-    /// The capability string `pp.native.has(...)` answers for.
+    /// The capability string `window.rahtiNative.has(...)` answers for: hyphens.
     pub capability: &'static str,
     pub kind: Capability,
     /// One line, used by the generated shell's documentation.
@@ -94,7 +94,7 @@ pub fn is_allowed(name: &str) -> bool {
     commands().iter().any(|command| command.name == name)
 }
 
-/// The capability strings, for the bridge script's `pp.native.has(...)`.
+/// The capability strings, for the bridge script's `window.rahtiNative.has(...)`.
 pub fn capability_names() -> Vec<&'static str> {
     commands().iter().map(|c| c.capability).collect()
 }

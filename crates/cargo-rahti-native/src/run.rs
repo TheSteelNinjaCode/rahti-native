@@ -16,9 +16,13 @@
 //!   committed file — on Windows by handing Tauri the variables it reads, and
 //!   on Android by wiring the key into the generated Gradle project, because
 //!   Tauri reads no signing key from the environment there;
-//! - the artifacts are found and their absolute paths printed, because
-//!   "finished in 4m12s" is not an answer to "where is the installer", and
-//!   recorded in `native/.rahti/build.json` for whatever runs next.
+//! - the artifacts are found, copied to `native/packages/<target>/<profile>/`
+//!   under names that say what they are, and those paths printed, because
+//!   "finished in 4m12s" is not an answer to "where is the installer";
+//! - the build is described in `native/.rahti/build.json` from the moment it
+//!   starts, with its full output in `build.log` (see [`crate::progress`]);
+//! - `--device` takes a serial, an AVD or `emulator`, and boots an AVD that is
+//!   not running (see [`crate::devices`]).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -758,7 +762,7 @@ pub(crate) fn configure_signing(generated: &Path) -> Result<(), NativeError> {
     configure_signing_with(generated, signing_key()?.as_ref())
 }
 
-/// [`configure_signing`] with the key already chosen: the configured one, this
+/// `configure_signing` with the key already chosen: the configured one, this
 /// machine's (see `release_key`), or none for a debug build.
 pub(crate) fn configure_signing_with(
     generated: &Path,

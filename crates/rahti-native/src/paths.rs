@@ -256,7 +256,8 @@ impl AppPaths {
     /// is the one path that is not always the packaged one: a `cargo rahti
     /// native dev` run has no bundle to stage from and serves the project's
     /// own `public/` directly, which is also what makes a stylesheet edit
-    /// visible without a rebuild. See [`resolve_public`].
+    /// visible without a rebuild. The generated shell's `lib.rs` makes that
+    /// choice and passes the result here.
     ///
     /// Set rather than defaulted: `std::env::set_var` overwrites, and that is
     /// deliberate. An installed application inherits the environment of

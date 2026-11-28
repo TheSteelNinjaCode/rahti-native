@@ -84,8 +84,9 @@ cargo rahti native emulator Medium_Phone
 subcommand dispatch. If the helper is not installed, `cargo rahti native`
 prints the one line that installs it and does nothing else.
 
-`build` prints the absolute path of every artifact this run produced, and
-nothing an earlier build left in the output directories.
+`build` copies every package this run produced into
+`native/packages/<windows|android>/<release|debug>/` and prints those paths,
+and nothing an earlier build left behind (see [Build outputs](#build-outputs)).
 
 ### From an agent
 
@@ -100,7 +101,8 @@ scraping a terminal:
 | What did the build produce, and what should be said about it? | `native/.rahti/build.json`: `target`, `profile`, `abi`, `device`, `installed`, `artifacts` (the files in `native/packages/`), `packages` (their directory), `warnings`, `seconds`, and `error` on failure. |
 | What went wrong? | `native/.rahti/build.log` has the whole output without colour codes, and a failed build prints its last 25 lines again at the very end. |
 | Which devices can I use? | `devices --json`: attached devices with `ready`, `model` and `abi`, and the AVDs this machine can start. |
-| Does the change work on a device? | `build --target android --debug --device <serial\|avd\|emulator>` builds an APK for that device's ABI, installs it, starts the application and exits. An AVD that is not running is booted first. `dev` does the same and stays running. |
+| Does the change work on a device? | `build --target android --debug --device <serial\|avd\|emulator>` builds an APK for that device's ABI, installs it, starts the application and exits. An AVD that is not running is booted first. `dev --device` stays running instead, and passes the name to Tauri as it is: only `build` and `emulator` understand AVD names and `emulator`. |
+| Where is the package? | `native/packages/<target>/<profile>/`, and `artifacts` in `build.json`. |
 
 `--device` takes a serial from `adb devices`, the name of an AVD, or
 `emulator` — the running emulator, or with none running the only AVD. A serial
@@ -126,6 +128,16 @@ backtraces keep their files and lines, and the library is a fraction of the
 half-gigabyte that full debug info makes it — which an emulator could not
 reinstall, because a reinstall holds both copies. Set the variable yourself to
 choose another level.
+
+Everything the tool records is in `native/.rahti/`, which `native/.gitignore`
+excludes:
+
+| File | Written by | Holds |
+| --- | --- | --- |
+| `build.json` | `build`, from the moment it starts | The current or last build: `state`, `pid`, `command`, `started`, `phase`, `phases`, `seconds`, `artifacts`, `packages`, `warnings`, `signing`, `error`. |
+| `build.log` | `build` | That build's whole output, without colour codes. Replaced by the next build. |
+| `emulator.log` | `emulator`, `build --device <avd>` | The output of the last emulator this tool started. |
+| `dev.log` | the application under `dev` | Development diagnostics, which carry rendered values and URLs. |
 
 A debug package carries the values `development.env` names, and the build says
 which. Keep it on your own devices.
@@ -553,11 +565,15 @@ is the value; the copy in `tauri.conf.json` covers the shell's own placeholder
 document.
 
 The default permits no external source of anything, no `'unsafe-eval'` and no
-inline script, and requires Trusted Types with the single `pulsepoint` policy
+inline script (`style-src` allows inline styles, which a `style` attribute
+needs and which run nothing), and requires Trusted Types with the single
+`pulsepoint` policy
 — the same policy a web deployment sends. PulsePoint runs only the client
 registry the application compiled, served from this origin, so injected markup
 cannot run script and cannot load an attacker's file. An XSS here would reach
-the native bridge, which is why the policy stays this strict.
+the native bridge, which is why the policy stays this strict: a `security.csp`
+whose `script-src` has `'unsafe-eval'` or `'unsafe-inline'` is refused when the
+configuration is read.
 
 ### The native command bridge
 
@@ -565,13 +581,13 @@ In a browser, an XSS is a stolen session. In a native shell it is a stolen
 session **and** whatever the page can reach through the bridge. So the bridge
 is an allowlist, and it is five entries:
 
-| Command | What it does |
-| --- | --- |
-| `platform` | Which operating system. |
-| `app_version` | The installed version. |
-| `app_data_dir` | Where this installation keeps its data, for showing the user. |
-| `open_external` | Hands an `http`, `https` or `mailto` URL to the user's own browser. |
-| `choose_file` | Opens the platform picker and returns what the user chose. |
+| `invoke(...)` | `has(...)` | What it does |
+| --- | --- | --- |
+| `platform` | `platform` | Which operating system. |
+| `app_version` | `app-version` | The installed version. |
+| `app_data_dir` | `app-data-dir` | Where this installation keeps its data, for showing the user. |
+| `open_external` | `open-external` | Hands an `http`, `https` or `mailto` URL to the user's own browser. |
+| `choose_file` | `choose-file` | Opens the platform picker and returns what the user chose. |
 
 Nothing runs a program. Nothing reads a path the page names — `choose_file`
 returns what a *human* selected, and that difference is the security model.
@@ -619,6 +635,16 @@ html! {
 **The same page has to work as a website.** `window.rahtiNative` is undefined
 in a browser, and a page that assumed otherwise is a page your web deployment
 breaks on. Every use is a capability check with a web fallback.
+
+What the object has, and nothing else:
+
+| Member | |
+| --- | --- |
+| `available` | `true`. The object exists only in a package. |
+| `platform` | `"windows"` or `"android"`. |
+| `version` | The installed application's version. |
+| `has(capability)` | Whether this package offers it. Capability names use hyphens: `open-external`. Always `false` on an `android.remote` hosted page. |
+| `invoke(command, payload)` | A promise. Command names use underscores: `open_external`. A name not on the allowlist is rejected before it reaches the shell. |
 
 ### Pull to refresh
 

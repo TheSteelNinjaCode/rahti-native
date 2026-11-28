@@ -30,7 +30,7 @@ impl Platform {
         }
     }
 
-    /// The name `pp.native.platform` reports to the browser.
+    /// The name `window.rahtiNative.platform` reports to the browser.
     pub const fn name(self) -> &'static str {
         match self {
             Platform::Windows => "windows",

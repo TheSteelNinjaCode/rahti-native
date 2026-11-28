@@ -1,4 +1,4 @@
-//! The `pp.native` bridge script.
+//! The `window.rahtiNative` bridge script.
 
 use crate::bridge::*;
 
