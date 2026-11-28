@@ -87,6 +87,9 @@ is a rule users read.
     may require a session that stays running, and `dev` is not the only way onto
     a device. What a command concludes is available without reading a terminal:
     `doctor --json` for prerequisites, `native/.rahti/build.json` for a build.
+    Every package is copied to `native/packages/<target>/<profile>/` as
+    `<product>-<version>-<variant>[-debug].<ext>`, and that is the only path
+    printed, recorded and installed from.
     Report what this run produced and nothing older, and say what succeeded
     badly — warnings are printed even when nothing blocks the build.
     `build.json` is written when a build *starts* (`state: running`, `pid`,

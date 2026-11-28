@@ -245,9 +245,11 @@ DEV:
     --device <name>    Which Android device or emulator.
 
 BUILD:
-    Windows produces an executable and an installer. Android produces an APK,
-    an AAB, or both. Absolute paths to what this build produced are printed at
-    the end and recorded, with its warnings, in native/.rahti/build.json.
+    Windows produces an NSIS .exe installer and an .msi. Android produces an
+    APK, an AAB, or both. Every package is copied to
+    native/packages/<windows|android>/<release|debug>/ as
+    <product>-<version>-<variant>[-debug].<ext>, and those paths are printed
+    at the end and recorded, with the warnings, in native/.rahti/build.json.
 
     --format apk       Installs on a device directly. What testing wants.
     --format aab       What Google Play takes. Not installable as it is.

@@ -97,7 +97,7 @@ scraping a terminal:
 | Can this project build? | `doctor --json`: `ready`, and each finding's `name`, `state` and `advice`. Add `--release` for what a release needs. It exits non-zero when `ready` is false. |
 | Is a build running, and how far has it got? | `status --json`: `state` (`running`, `succeeded`, `failed`, `interrupted`), `pid`, `phase`, and `phases` with seconds each. The same file is `native/.rahti/build.json`, written when the build starts. |
 | Wait for it, then tell me | `status --wait` (or `--timeout <seconds>`). Exits zero only for a build that succeeded. |
-| What did the build produce, and what should be said about it? | `native/.rahti/build.json`: `target`, `profile`, `abi`, `device`, `installed`, `artifacts`, `warnings`, `seconds`, and `error` on failure. |
+| What did the build produce, and what should be said about it? | `native/.rahti/build.json`: `target`, `profile`, `abi`, `device`, `installed`, `artifacts` (the files in `native/packages/`), `packages` (their directory), `warnings`, `seconds`, and `error` on failure. |
 | What went wrong? | `native/.rahti/build.log` has the whole output without colour codes, and a failed build prints its last 25 lines again at the very end. |
 | Which devices can I use? | `devices --json`: attached devices with `ready`, `model` and `abi`, and the AVDs this machine can start. |
 | Does the change work on a device? | `build --target android --debug --device <serial\|avd\|emulator>` builds an APK for that device's ABI, installs it, starts the application and exits. An AVD that is not running is booted first. `dev` does the same and stays running. |
@@ -676,10 +676,32 @@ runs. PulsePoint's bundle is not edited, patched or wrapped.
 
 ## Build outputs
 
-A successful native build prints the executable and installer paths. Windows
-output discovery uses Cargo's resolved target directory, including
-`CARGO_TARGET_DIR` and `.cargo/config.toml` overrides. Android packages are
-reported from `native/gen/android/app/build/outputs`.
+Every package a build produces is copied into one directory, and that is the
+path the build prints, records and installs from:
+
+```text
+native/packages/
+  windows/
+    release/  myapp-1.2.0-x64-setup.exe     NSIS installer
+              myapp-1.2.0-x64-en-US.msi     WiX installer
+    debug/    myapp-1.2.0-x64-setup-debug.exe
+  android/
+    release/  myapp-1.2.0-universal.apk     every ABI, installs anywhere
+              myapp-1.2.0-universal.aab     what Google Play takes
+              myapp-1.2.0-arm64.apk         one ABI (`--abi`, `--device`)
+    debug/    myapp-1.2.0-x86_64-debug.apk
+```
+
+Names are `<product>-<version>-<variant>[-debug].<ext>`: the product name
+lowercased, the `version` from `rahti.native.json`, and the variant the
+bundler built. A release Gradle could not sign keeps `-unsigned` in its name.
+A rebuild of the same version replaces its file; an older version's stays
+until you delete it. The directory ignores itself with its own `.gitignore`.
+
+The bundlers' own directories are left as they are, because the next build
+compares against them: Windows under Cargo's target directory (including a
+`CARGO_TARGET_DIR` or `.cargo/config.toml` override), Android under
+`native/gen/android/app/build/outputs`. Nothing needs to read them.
 
 ## Signing
 

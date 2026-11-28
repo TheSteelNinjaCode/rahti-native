@@ -193,3 +193,83 @@ fn the_build_report_says_what_an_agent_would_otherwise_scrape() {
     assert_eq!(report["warnings"][0]["state"], "warning");
     assert_eq!(report["warnings"][0]["advice"], "Do not pass it on.");
 }
+
+// -------------------------------------------------------------- packages
+
+#[test]
+fn every_package_lands_in_one_directory_per_target_and_profile() {
+    let fixture = Fixture::new();
+    let project = fixture.project();
+    assert_eq!(
+        crate::run::packages_dir(&project, Platform::Android, true),
+        fixture.0.join("native/packages/android/debug")
+    );
+    assert_eq!(
+        crate::run::packages_dir(&project, Platform::Windows, false),
+        fixture.0.join("native/packages/windows/release")
+    );
+}
+
+#[test]
+fn a_package_is_named_for_the_application_its_version_and_its_variant() {
+    use crate::run::package_name;
+    let android =
+        |debug, file| package_name("ilnaya", "ilnaya", "0.1.0", Platform::Android, debug, file);
+    assert_eq!(
+        android(false, "app-universal-release.apk"),
+        "ilnaya-0.1.0-universal.apk"
+    );
+    assert_eq!(
+        android(false, "app-universal-release.aab"),
+        "ilnaya-0.1.0-universal.aab"
+    );
+    assert_eq!(
+        android(false, "app-arm64-release.apk"),
+        "ilnaya-0.1.0-arm64.apk"
+    );
+    assert_eq!(
+        android(true, "app-x86_64-debug.apk"),
+        "ilnaya-0.1.0-x86_64-debug.apk"
+    );
+    assert_eq!(
+        android(false, "app-universal-release-unsigned.apk"),
+        "ilnaya-0.1.0-universal-unsigned.apk",
+        "an unsigned package keeps saying so"
+    );
+
+    let windows = |debug, file| {
+        package_name(
+            "my-shop",
+            "My Shop",
+            "2.3.0",
+            Platform::Windows,
+            debug,
+            file,
+        )
+    };
+    assert_eq!(
+        windows(false, "My Shop_2.3.0_x64-setup.exe"),
+        "my-shop-2.3.0-x64-setup.exe"
+    );
+    assert_eq!(
+        windows(false, "My Shop_2.3.0_x64_en-US.msi"),
+        "my-shop-2.3.0-x64-en-US.msi"
+    );
+    assert_eq!(
+        windows(true, "My Shop_2.3.0_x64-setup.exe"),
+        "my-shop-2.3.0-x64-setup-debug.exe"
+    );
+    assert_eq!(
+        windows(false, "something-else.msi"),
+        "my-shop-2.3.0-something-else.msi",
+        "an unfamiliar name is kept, not guessed at"
+    );
+}
+
+#[test]
+fn the_product_name_becomes_a_file_name() {
+    assert_eq!(crate::run::package_slug("ilnaya", "x"), "ilnaya");
+    assert_eq!(crate::run::package_slug("My  Shop!", "x"), "my-shop");
+    assert_eq!(crate::run::package_slug("Ñandú", "fallback"), "and");
+    assert_eq!(crate::run::package_slug("—", "fallback"), "fallback");
+}

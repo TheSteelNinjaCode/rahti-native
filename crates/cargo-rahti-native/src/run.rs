@@ -311,7 +311,8 @@ fn build_phases(
         ));
     }
 
-    let artifacts = report_artifacts(project, args, abi, format, started);
+    let (built, searched) = find_artifacts(project, args, abi, format, started);
+    let artifacts = publish_packages(project, config, args, &built, &searched)?;
     if let Some(finding) = unsigned_release(args, &artifacts) {
         println!();
         doctor::report(std::slice::from_ref(&finding));
@@ -320,6 +321,7 @@ fn build_phases(
 
     let mut report = build_report(args, abi, &artifacts, &warnings, false);
     report["device"] = serial.clone().into();
+    report["packages"] = serde_json::json!(packages_dir(project, args.target, args.debug));
     if let Some(signer) = &signer {
         report["signing"] = signer.to_json();
     }
@@ -1442,60 +1444,195 @@ pub(crate) fn written_since(path: &Path, started: SystemTime) -> bool {
         .is_ok_and(|modified| modified >= earliest)
 }
 
-/// Print the absolute path of everything this build produced, and return it.
+/// Everything this build produced, where the bundler left it.
 ///
 /// Found by walking the output directories rather than by predicting the
 /// filenames, because a bundler's naming is its own and a printed path that
 /// does not exist is worse than none.
-fn report_artifacts(
+fn find_artifacts(
     project: &Project,
     args: &Build,
     abi: Option<AndroidAbi>,
     format: Option<AndroidFormat>,
     started: SystemTime,
-) -> Vec<PathBuf> {
+) -> (Vec<PathBuf>, PathBuf) {
     let native = project.native_dir();
     let profile = if args.debug { "debug" } else { "release" };
-    let override_dir = std::env::var_os("CARGO_TARGET_DIR");
-    let target_dir = target_directory(&native, override_dir.as_deref());
-
     let mut found: Vec<PathBuf> = Vec::new();
 
-    match args.target {
+    let searched = match args.target {
         Platform::Android => {
             let outputs = native.join("gen/android/app/build/outputs");
             for (dir, extension) in android_output_dirs(&outputs, abi, format, args.debug) {
                 collect(&dir, &[extension], &mut found);
             }
+            outputs
         }
         _ => {
-            let target = target_dir.join(profile);
+            let override_dir = std::env::var_os("CARGO_TARGET_DIR");
+            let bundle = target_directory(&native, override_dir.as_deref())
+                .join(profile)
+                .join("bundle");
             // The bundlers rewrite their installers on every run, so one older
             // than this build is from before a rename or a version bump.
-            collect(&target.join("bundle"), &["exe", "msi"], &mut found);
+            collect(&bundle, &["exe", "msi"], &mut found);
             found.retain(|path| written_since(path, started));
-            // Not filtered: cargo leaves a current executable alone.
-            let exe = target.join(format!("{}-native.exe", project.package));
-            if exe.is_file() {
-                found.push(exe);
-            }
+            bundle
         }
-    }
-
-    println!();
+    };
     found.sort();
-    if found.is_empty() {
+    (found, searched)
+}
+
+/// Where every finished package is copied: `native/packages/<target>/<profile>/`.
+pub(crate) fn packages_dir(project: &Project, target: Platform, debug: bool) -> PathBuf {
+    project
+        .native_dir()
+        .join("packages")
+        .join(target.name())
+        .join(if debug { "debug" } else { "release" })
+}
+
+/// Copy what this build produced into `native/packages/`, under names that
+/// say what each file is, print those paths and return them.
+///
+/// ## Why a copy, in one place
+///
+/// Each bundler keeps its output in its own tree (NSIS and WiX under Cargo's
+/// target directory, Gradle under `gen/android/app/build/outputs/<kind>/
+/// <flavor>/<profile>`) and names it for itself: `app-universal-release.apk`
+/// says neither which application nor which version. So whoever needed the
+/// file had to know four paths, and agents copied packages into directories of
+/// their own invention. Every package now lands in one directory, named
+/// `<product>-<version>-<variant>[-debug].<ext>`.
+///
+/// Copied, not moved or linked: Gradle and the bundlers compare against their
+/// own output on the next build, and Gradle rewrites an APK in place, which
+/// would rewrite the other name of a hard link too. A rebuild of the same
+/// version replaces its file; an older version's stays until it is deleted.
+fn publish_packages(
+    project: &Project,
+    config: &NativeConfig,
+    args: &Build,
+    built: &[PathBuf],
+    searched: &Path,
+) -> Result<Vec<PathBuf>, NativeError> {
+    println!();
+    if built.is_empty() {
         println!("  The build reported success, but no package was found where one was");
         println!("  expected. Look under:");
-        println!("    {}", target_dir.display());
-        return found;
+        println!("    {}", searched.display());
+        return Ok(Vec::new());
     }
 
-    println!("  Built:");
-    for path in &found {
-        println!("    {}", path.display());
+    let dir = packages_dir(project, args.target, args.debug);
+    std::fs::create_dir_all(&dir).map_err(|e| NativeError::io("build", &dir, e))?;
+    // Ignored by its own file, so no project's .gitignore has to know about it.
+    let ignore = project.native_dir().join("packages/.gitignore");
+    if !ignore.is_file() {
+        std::fs::write(
+            &ignore,
+            "# Packages `cargo rahti native build` produced. Not source.\n*\n",
+        )
+        .map_err(|e| NativeError::io("build", &ignore, e))?;
     }
-    found
+
+    let slug = package_slug(&config.product_name, &project.package);
+    let mut published = Vec::new();
+    for source in built {
+        let Some(file) = source.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let name = package_name(
+            &slug,
+            &config.product_name,
+            &config.version,
+            args.target,
+            args.debug,
+            file,
+        );
+        let destination = dir.join(name);
+        std::fs::copy(source, &destination)
+            .map_err(|e| NativeError::io("build", &destination, e))?;
+        published.push(destination);
+    }
+
+    println!("  Packages in {}:", dir.display());
+    for path in &published {
+        let size = std::fs::metadata(path).map_or(0, |m| m.len());
+        println!(
+            "    {}  ({})",
+            path.file_name().unwrap_or_default().to_string_lossy(),
+            megabytes(size)
+        );
+    }
+    Ok(published)
+}
+
+fn megabytes(bytes: u64) -> String {
+    format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+}
+
+/// The product name as a file name: lowercase, `-` for anything else.
+pub(crate) fn package_slug(product_name: &str, fallback: &str) -> String {
+    let mut slug = String::new();
+    for c in product_name.chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c.to_ascii_lowercase());
+        } else if !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let slug = slug.trim_matches('-').to_string();
+    if slug.is_empty() {
+        fallback.to_string()
+    } else {
+        slug
+    }
+}
+
+/// `<slug>-<version>-<variant>[-debug].<ext>` for one bundler's file.
+///
+/// - Gradle: `app-<flavor>-<profile>[-unsigned].<ext>`, so the variant is the
+///   flavor (`universal`, `arm64`, `x86_64`), and an unsigned package keeps
+///   saying so.
+/// - Tauri: `<productName>_<version>_<arch>-setup.exe` and
+///   `<productName>_<version>_<arch>_<language>.msi`, so the variant is what
+///   follows the version: `x64-setup`, `x64-en-US`.
+///
+/// A name in neither shape keeps its own name after the prefix, rather than
+/// being guessed at.
+pub(crate) fn package_name(
+    slug: &str,
+    product_name: &str,
+    version: &str,
+    target: Platform,
+    debug: bool,
+    file: &str,
+) -> String {
+    let (stem, extension) = file.rsplit_once('.').unwrap_or((file, ""));
+    let profile = if debug { "debug" } else { "release" };
+
+    let variant = match target {
+        Platform::Android => stem.strip_prefix("app-").map(|rest| {
+            let (flavor, unsigned) = match rest.strip_suffix("-unsigned") {
+                Some(rest) => (rest, "-unsigned"),
+                None => (rest, ""),
+            };
+            let flavor = flavor
+                .strip_suffix(&format!("-{profile}"))
+                .unwrap_or(flavor);
+            format!("{flavor}{unsigned}")
+        }),
+        _ => stem
+            .strip_prefix(&format!("{product_name}_{version}_"))
+            .map(|rest| rest.replace('_', "-")),
+    }
+    .unwrap_or_else(|| stem.to_string());
+
+    let debug = if debug { "-debug" } else { "" };
+    let dot = if extension.is_empty() { "" } else { "." };
+    format!("{slug}-{version}-{variant}{debug}{dot}{extension}")
 }
 
 pub(crate) fn build_report(
