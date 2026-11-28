@@ -22,11 +22,13 @@
 //! prints the command to run; the person whose machine it is runs it.
 
 mod args;
+mod devices;
 mod doctor;
 mod downloads;
 mod icons;
 mod init;
 mod launch_screen;
+mod progress;
 mod project;
 mod release_key;
 mod run;
@@ -47,6 +49,8 @@ use project::Project;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() -> ExitCode {
+    // Before anything is spawned: see `progress::run_logged`.
+    progress::keep_std_handles_to_ourselves();
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let argv = args::strip_dispatch(&raw);
 
@@ -128,6 +132,13 @@ fn main() -> ExitCode {
             let config = load_config(project)?;
             run::build(project, &config, build_args)
         }),
+        Command::Status(ref status_args) => {
+            in_project(|project| progress::status(project, status_args))
+        }
+        Command::Devices(ref devices_args) => devices::list(devices_args),
+        Command::Emulator(ref emulator_args) => {
+            in_project(|project| devices::emulator(project, emulator_args))
+        }
     };
 
     match result {
@@ -170,7 +181,10 @@ USAGE:
     cargo rahti native icon <image> [--background <colour>]
     cargo rahti native dev --target <target> [--device <name>]
     cargo rahti native build --target <target> [--format apk|aab] [--debug]
-                             [--abi <abi>] [--device <serial>]
+                             [--abi <abi>] [--device <serial|avd|emulator>]
+    cargo rahti native status [--wait] [--timeout <seconds>] [--json]
+    cargo rahti native devices [--json]
+    cargo rahti native emulator [<avd>]
 
     <target> is `windows` or `android`.
 
@@ -243,9 +257,34 @@ BUILD:
     --abi <abi>        One Android ABI: arm64-v8a, armeabi-v7a, x86 or x86_64.
                        Much smaller than all four, which a debug build can
                        make too large for an emulator.
-    --device <serial>  An `adb devices` serial. Builds an APK for that device's
-                       ABI, installs it and starts the application, then exits.
-                       `dev` is the same for a session that stays running.
+    --device <d>       An `adb devices` serial, an AVD name, or `emulator` (the
+                       running emulator, or the only AVD). An AVD that is not
+                       running is booted first. Builds an APK for that
+                       device's ABI, installs it and starts the application,
+                       then exits. `dev` is the same for a session that stays
+                       running.
+
+    While it runs, native/.rahti/build.json says `state: running`, the phase
+    and the process; at the end, how long each phase took. The full output is
+    in native/.rahti/build.log, and a failure repeats its last lines at the
+    end. A second build of the same project is refused while one runs.
+
+STATUS:
+    What the current or last build is doing or did, from build.json. Exits
+    zero only for a build that succeeded.
+
+    --wait             Wait for a running build to end first.
+    --timeout <s>      Stop waiting after this many seconds (implies --wait).
+    --json             The report as JSON, and nothing else on stdout.
+
+DEVICES:
+    Attached devices with their state, model and ABI, and the AVDs this
+    machine can start. `--json` for agents.
+
+EMULATOR:
+    Have an emulator ready and print its serial: the AVD named, or without a
+    name the running emulator or the only AVD. Starts it detached if it is not
+    running, waits for it to finish booting, then exits.
 
     -h, --help         Print this message.
     -V, --version      Print the version.

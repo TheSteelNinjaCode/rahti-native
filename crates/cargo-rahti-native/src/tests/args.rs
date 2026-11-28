@@ -288,3 +288,44 @@ fn icon_takes_one_image_and_an_optional_background() {
     assert!(refused("icon a.svg --background red").contains("#rrggbb"));
     assert!(refused("icon a.svg --force").contains("not an option"));
 }
+
+// ------------------------------------------------- status, devices, emulator
+
+#[test]
+fn status_waits_only_when_asked_and_a_timeout_implies_waiting() {
+    assert_eq!(parsed("status"), Command::Status(Status::default()));
+    assert_eq!(
+        parsed("status --wait --json"),
+        Command::Status(Status {
+            wait: true,
+            timeout: None,
+            json: true,
+        })
+    );
+    assert_eq!(
+        parsed("status --timeout 600"),
+        Command::Status(Status {
+            wait: true,
+            timeout: Some(600),
+            json: false,
+        })
+    );
+    assert!(refused("status --timeout soon").contains("seconds"));
+}
+
+#[test]
+fn devices_and_emulator_take_what_they_need_and_nothing_else() {
+    assert_eq!(
+        parsed("devices --json"),
+        Command::Devices(Devices { json: true })
+    );
+    assert_eq!(parsed("emulator"), Command::Emulator(Emulator::default()));
+    assert_eq!(
+        parsed("emulator Medium_Phone"),
+        Command::Emulator(Emulator {
+            avd: Some("Medium_Phone".to_string()),
+        })
+    );
+    assert!(refused("emulator one two").contains("second"));
+    assert!(refused("devices --all").contains("not an option"));
+}

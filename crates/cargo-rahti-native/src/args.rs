@@ -31,6 +31,9 @@ pub enum Command {
     Icon(Icon),
     Dev(Dev),
     Build(Build),
+    Status(Status),
+    Devices(Devices),
+    Emulator(Emulator),
     Help,
     Version,
 }
@@ -91,6 +94,27 @@ pub struct Build {
     /// Install on this `adb` serial and start the application. Implies an APK,
     /// and the device's own ABI unless `abi` names another.
     pub device: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Status {
+    /// Wait for a running build to end before answering.
+    pub wait: bool,
+    /// Stop waiting after this many seconds, and say it is still running.
+    pub timeout: Option<u64>,
+    /// The report as JSON on stdout, and nothing else there.
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Devices {
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Emulator {
+    /// Which AVD. Without one: the running emulator, or the only AVD.
+    pub avd: Option<String>,
 }
 
 /// One of the four ABIs an Android package can carry.
@@ -178,11 +202,14 @@ pub fn parse(args: &[&str]) -> Result<Command, String> {
         Some("icon") => parse_icon(&args[1..]),
         Some("dev") => parse_dev(&args[1..]),
         Some("build") => parse_build(&args[1..]),
+        Some("status") => parse_status(&args[1..]),
+        Some("devices") => parse_devices(&args[1..]),
+        Some("emulator") => parse_emulator(&args[1..]),
         Some("--version" | "-V") => Ok(Command::Version),
         Some("help" | "--help" | "-h") | None => Ok(Command::Help),
         Some(other) => Err(format!(
             "`{other}` is not a `cargo rahti native` command.\n  \
-             Expected one of: init, doctor, icon, dev, build."
+             Expected one of: init, doctor, icon, dev, build, status, devices, emulator."
         )),
     }
 }
@@ -369,6 +396,59 @@ fn parse_build(args: &[&str]) -> Result<Command, String> {
         abi,
         device,
     }))
+}
+
+fn parse_status(args: &[&str]) -> Result<Command, String> {
+    let mut status = Status::default();
+    let mut i = 0;
+
+    while i < args.len() {
+        match args[i] {
+            "--wait" => status.wait = true,
+            "--timeout" => {
+                let raw = value(args, &mut i, "--timeout")?;
+                status.timeout = Some(raw.parse().map_err(|_| {
+                    format!("`--timeout` takes a number of seconds, and `{raw}` is not one.")
+                })?);
+                status.wait = true;
+            }
+            "--json" => status.json = true,
+            "--help" | "-h" => return Ok(Command::Help),
+            other => return Err(unknown(other, "status")),
+        }
+        i += 1;
+    }
+
+    Ok(Command::Status(status))
+}
+
+fn parse_devices(args: &[&str]) -> Result<Command, String> {
+    let mut devices = Devices::default();
+    for arg in args {
+        match *arg {
+            "--json" => devices.json = true,
+            "--help" | "-h" => return Ok(Command::Help),
+            other => return Err(unknown(other, "devices")),
+        }
+    }
+    Ok(Command::Devices(devices))
+}
+
+fn parse_emulator(args: &[&str]) -> Result<Command, String> {
+    let mut emulator = Emulator::default();
+    for arg in args {
+        match *arg {
+            "--help" | "-h" => return Ok(Command::Help),
+            flag if flag.starts_with('-') => return Err(unknown(flag, "emulator")),
+            avd if emulator.avd.is_none() => emulator.avd = Some(avd.to_string()),
+            extra => {
+                return Err(format!(
+                    "`emulator` takes one AVD name, and `{extra}` is a second."
+                ));
+            }
+        }
+    }
+    Ok(Command::Emulator(emulator))
 }
 
 fn push_target(targets: &mut Vec<&'static str>, name: &'static str) {

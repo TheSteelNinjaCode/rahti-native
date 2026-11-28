@@ -22,12 +22,14 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use rahti_native::{DatabaseMode, NativeConfig, NativeError, Platform};
 
 use crate::args::{AndroidAbi, AndroidFormat, Build, Dev};
 use crate::doctor;
+use crate::progress::Progress;
 use crate::project::Project;
 
 pub fn dev(project: &Project, config: &NativeConfig, args: &Dev) -> Result<(), NativeError> {
@@ -139,7 +141,68 @@ pub(crate) fn application_watch_folders(project: &Project, target: Platform) -> 
 }
 
 pub fn build(project: &Project, config: &NativeConfig, args: &Build) -> Result<(), NativeError> {
+    let progress = Progress::start(project, &invocation(args))?;
+    let progress = Arc::new(Mutex::new(progress));
+    let log = crate::progress::log_path(project);
+
+    let result = build_phases(project, config, args, &progress, &log);
+
+    let mut progress = progress.lock().unwrap_or_else(|e| e.into_inner());
+    let summary = progress.finish(result.as_ref().err());
+    // The last lines are the ones an agent keeps, so the failure's own words
+    // and the verdict go there — not 4,000 lines up, inside Gradle's output.
+    if result.is_err() {
+        let tail = crate::progress::tail(&log, 25);
+        if !tail.is_empty() {
+            println!();
+            println!("  Last lines of {}:", log.display());
+            for line in tail {
+                println!("    {line}");
+            }
+        }
+    }
+    println!();
+    println!(
+        "  Report: {}",
+        crate::progress::report_path(project).display()
+    );
+    println!("  {summary}");
+    result
+}
+
+/// The command as typed, for `status` and for a refused second build.
+fn invocation(args: &Build) -> String {
+    let mut line = format!("build --target {}", args.target.name());
+    if let Some(format) = args.format {
+        line.push_str(&format!(" --format {}", format.name()));
+    }
+    if args.debug {
+        line.push_str(" --debug");
+    }
+    if let Some(abi) = args.abi {
+        line.push_str(&format!(" --abi {}", abi.flavor()));
+    }
+    if let Some(device) = &args.device {
+        line.push_str(&format!(" --device {device}"));
+    }
+    line
+}
+
+fn set_phase(progress: &Mutex<Progress>, name: &str) {
+    if let Ok(mut progress) = progress.lock() {
+        progress.phase(name);
+    }
+}
+
+fn build_phases(
+    project: &Project,
+    config: &NativeConfig,
+    args: &Build,
+    progress: &Arc<Mutex<Progress>>,
+    log: &Path,
+) -> Result<(), NativeError> {
     let started = SystemTime::now();
+    set_phase(progress, "prepare");
     let mut warnings = prepare(project, config, args.target, !args.debug)?;
     warnings.extend(debug_credentials(project, config, args));
 
@@ -151,10 +214,15 @@ pub fn build(project: &Project, config: &NativeConfig, args: &Build) -> Result<(
     }
 
     // Before the build: a serial that is not attached should cost a sentence,
-    // not several minutes of compiling.
-    let abi = match (args.abi, &args.device) {
+    // not several minutes of compiling. An AVD named here is booted now, while
+    // nothing else needs the machine.
+    let serial = match &args.device {
+        Some(device) => Some(crate::devices::resolve(project, device)?),
+        None => None,
+    };
+    let abi = match (args.abi, &serial) {
         (Some(abi), _) => Some(abi),
-        (None, Some(device)) => Some(device_abi(device)?),
+        (None, Some(serial)) => Some(device_abi(serial)?),
         (None, None) => None,
     };
     // `--device` has to install something, and only an APK installs.
@@ -204,8 +272,44 @@ pub fn build(project: &Project, config: &NativeConfig, args: &Build) -> Result<(
         println!("  format: {}", format.name());
     }
     println!("  running {}", describe(&command));
+    println!("  log: {}", log.display());
     println!();
-    execute(command, "build")?;
+
+    // `rust` until Cargo's first `Finished`, then the bundler: on Android,
+    // Gradle, which also calls Cargo again (a no-op by then) per ABI.
+    set_phase(progress, "rust");
+    let bundler = if args.target == Platform::Android {
+        "gradle"
+    } else {
+        "bundle"
+    };
+    let watcher = progress.clone();
+    let mut compiled = false;
+    let status = crate::progress::run_logged(command, log, move |line| {
+        if !compiled && line.contains("Finished `") {
+            compiled = true;
+            set_phase(&watcher, bundler);
+        }
+    })
+    .map_err(|e| {
+        NativeError::new(
+            "tauri",
+            format!(
+                "could not run `cargo tauri`: {e}
+                   Install it with: cargo install tauri-cli --version \"^2.8\" --locked"
+            ),
+        )
+    })?;
+    if !status.success() {
+        return Err(NativeError::new(
+            "tauri",
+            format!(
+                "`cargo tauri build` failed ({status}).
+                   The output above is Tauri's own; all of it is in {}.",
+                log.display()
+            ),
+        ));
+    }
 
     let artifacts = report_artifacts(project, args, abi, format, started);
     if let Some(finding) = unsigned_release(args, &artifacts) {
@@ -214,23 +318,23 @@ pub fn build(project: &Project, config: &NativeConfig, args: &Build) -> Result<(
         warnings.push(finding);
     }
 
-    let installed = match &args.device {
-        Some(device) => {
-            install_on_device(device, &artifacts, &config.identifier)?;
-            true
-        }
-        None => false,
-    };
+    let mut report = build_report(args, abi, &artifacts, &warnings, false);
+    report["device"] = serial.clone().into();
+    if let Some(signer) = &signer {
+        report["signing"] = signer.to_json();
+    }
+    if let Ok(mut progress) = progress.lock() {
+        progress.merge(report);
+    }
 
-    write_build_report(
-        project,
-        args,
-        abi,
-        &artifacts,
-        &warnings,
-        installed,
-        signer.as_ref(),
-    )
+    if let Some(serial) = &serial {
+        set_phase(progress, "install");
+        install_on_device(serial, &artifacts, &config.identifier)?;
+        if let Ok(mut progress) = progress.lock() {
+            progress.merge(serde_json::json!({ "installed": true }));
+        }
+    }
+    Ok(())
 }
 
 /// The one thing a successful debug build can do badly: be passed on.
@@ -319,7 +423,20 @@ fn install_on_device(
         device,
         "install",
         &["install", "-r", &package.display().to_string()],
-    )?;
+    )
+    .map_err(|error| {
+        if !error.to_string().contains("INSUFFICIENT_STORAGE") {
+            return error;
+        }
+        NativeError::new(
+            "android",
+            format!(
+                "{error}
+                   A reinstall needs room for the old copy and the new one at once. Uninstalling                  first frees it, and deletes the application's data on {device}:
+                     adb -s {device} uninstall {identifier}"
+            ),
+        )
+    })?;
 
     let activity = format!("{identifier}/.MainActivity");
     adb_on(device, "start", &["shell", "am", "start", "-n", &activity])?;
@@ -1192,6 +1309,7 @@ fn android_environment(command: &mut Command, project: &Project) -> Result<(), N
     command.env("ANDROID_HOME", &sdk);
     command.env("ANDROID_SDK_ROOT", &sdk);
     command.env("NDK_HOME", &ndk);
+    debug_library_size(command);
 
     let java = doctor::java(project);
     let home = java.home.ok_or_else(|| {
@@ -1214,6 +1332,29 @@ fn android_environment(command: &mut Command, project: &Project) -> Result<(), N
     // the generated Gradle project instead — see the note there.
 
     Ok(())
+}
+
+/// The debug-info level of an Android debug library.
+///
+/// Cargo's `dev` profile carries full debug info, and Tauri's Gradle project
+/// keeps debug symbols in a debug package. For an application linking a whole
+/// web backend that is a library of half a gigabyte, stored uncompressed: the
+/// package takes tens of seconds to write and to push, and an emulator with a
+/// few gigabytes free refuses to *reinstall* it, because it holds the old and
+/// the new copy at once. So the second debug build in a row failed with
+/// `INSTALL_FAILED_INSUFFICIENT_STORAGE`.
+///
+/// Line tables keep what a debug build on a device is used for — a panic's
+/// backtrace with files and lines — and drop the type and variable
+/// information only a native debugger reads. Set for the child only, and not
+/// at all when the variable is already set: whoever set it decides.
+pub(crate) const DEV_DEBUG: (&str, &str) = ("CARGO_PROFILE_DEV_DEBUG", "line-tables-only");
+
+fn debug_library_size(command: &mut Command) {
+    let (name, value) = DEV_DEBUG;
+    if std::env::var_os(name).is_none() {
+        command.env(name, value);
+    }
 }
 
 /// The same, for a Windows code-signing certificate.
@@ -1355,41 +1496,6 @@ fn report_artifacts(
         println!("    {}", path.display());
     }
     found
-}
-
-/// Where the last `build` is described for whatever runs next.
-pub(crate) fn build_report_path(project: &Project) -> PathBuf {
-    project.native_dir().join(".rahti/build.json")
-}
-
-/// Record what this build produced in `native/.rahti/build.json`.
-///
-/// A build's output is thousands of lines of somebody else's tooling, and an
-/// agent running one usually keeps only the end of it. This is the same answer
-/// as a file, so nothing has to be parsed out of a terminal.
-fn write_build_report(
-    project: &Project,
-    args: &Build,
-    abi: Option<AndroidAbi>,
-    artifacts: &[PathBuf],
-    warnings: &[doctor::Finding],
-    installed: bool,
-    signer: Option<&Signer>,
-) -> Result<(), NativeError> {
-    let mut report = build_report(args, abi, artifacts, warnings, installed);
-    if let Some(signer) = signer {
-        report["signing"] = signer.to_json();
-    }
-    let path = build_report_path(project);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| NativeError::io("build", parent, e))?;
-    }
-    let text = serde_json::to_string_pretty(&report).unwrap_or_default();
-    std::fs::write(&path, text).map_err(|e| NativeError::io("build", &path, e))?;
-
-    println!();
-    println!("  Report: {}", path.display());
-    Ok(())
 }
 
 pub(crate) fn build_report(

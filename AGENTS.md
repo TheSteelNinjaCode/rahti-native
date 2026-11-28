@@ -89,6 +89,11 @@ is a rule users read.
     `doctor --json` for prerequisites, `native/.rahti/build.json` for a build.
     Report what this run produced and nothing older, and say what succeeded
     badly — warnings are printed even when nothing blocks the build.
+    `build.json` is written when a build *starts* (`state: running`, `pid`,
+    `phase`) and `status --wait` waits on it. A child's output is piped
+    through `progress::run_logged`, never inherited by `build`: on Windows a
+    Gradle daemon started under an inherited pipe keeps the caller's pipe open
+    for hours, and the caller never sees the build end.
 14. `cargo-rahti-native` has no image dependency. `icon` writes SVG and lets
     `cargo tauri icon` draw it.
 15. A default is what most applications need, on without being asked for.

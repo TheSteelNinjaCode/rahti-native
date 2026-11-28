@@ -74,6 +74,10 @@ cargo rahti native build --target windows
 cargo rahti native build --target android --format apk
 cargo rahti native build --target android --format aab
 cargo rahti native build --target android --debug --device emulator-5554
+cargo rahti native build --target android --debug --device emulator
+cargo rahti native status --wait
+cargo rahti native devices
+cargo rahti native emulator Medium_Phone
 ```
 
 `cargo rahti-native …` reaches the same tool directly, through cargo's own
@@ -91,13 +95,37 @@ scraping a terminal:
 | Question | Answer |
 | --- | --- |
 | Can this project build? | `doctor --json`: `ready`, and each finding's `name`, `state` and `advice`. Add `--release` for what a release needs. It exits non-zero when `ready` is false. |
-| What did the build produce, and what should be said about it? | `native/.rahti/build.json`: `target`, `profile`, `abi`, `device`, `installed`, `artifacts` and `warnings`. |
-| Does the change work on a device? | `build --target android --debug --device <serial>` builds an APK for that device's ABI, installs it, starts the application and exits. `dev` does the same and stays running. |
+| Is a build running, and how far has it got? | `status --json`: `state` (`running`, `succeeded`, `failed`, `interrupted`), `pid`, `phase`, and `phases` with seconds each. The same file is `native/.rahti/build.json`, written when the build starts. |
+| Wait for it, then tell me | `status --wait` (or `--timeout <seconds>`). Exits zero only for a build that succeeded. |
+| What did the build produce, and what should be said about it? | `native/.rahti/build.json`: `target`, `profile`, `abi`, `device`, `installed`, `artifacts`, `warnings`, `seconds`, and `error` on failure. |
+| What went wrong? | `native/.rahti/build.log` has the whole output without colour codes, and a failed build prints its last 25 lines again at the very end. |
+| Which devices can I use? | `devices --json`: attached devices with `ready`, `model` and `abi`, and the AVDs this machine can start. |
+| Does the change work on a device? | `build --target android --debug --device <serial\|avd\|emulator>` builds an APK for that device's ABI, installs it, starts the application and exits. An AVD that is not running is booted first. `dev` does the same and stays running. |
 
-`--device` takes a serial from `adb devices`, and is refused before anything
-compiles if that device is not attached. `--abi` builds one ABI without a
-device. Prefer either to a universal debug package, which carries four debug
-libraries and can be too large for an emulator to install.
+`--device` takes a serial from `adb devices`, the name of an AVD, or
+`emulator` — the running emulator, or with none running the only AVD. A serial
+that is not attached is refused before anything compiles. `emulator [<avd>]`
+boots one on its own, detached, waits until it can take an install and prints
+its serial. `--abi` builds one ABI without a device. Prefer either to a
+universal package, which compiles the application four times.
+
+A build's last line is how long it took and where: `Finished in 1m12s
+(prepare 1s, rust 40s, gradle 21s, install 10s).` While one build of a project
+runs, a second is refused with the first one's process and age, because it
+would only wait on the first one's Cargo lock and look hung.
+
+The build does not hold the caller's output open after it ends. Gradle starts
+a daemon that lives for hours, and on Windows a daemon started under an
+inherited pipe kept that pipe open, so an agent's background task never saw
+the build finish. The tooling's output is piped through the build and copied
+to the log instead, and the build exits when the work does.
+
+A debug Android library is built with line tables only
+(`CARGO_PROFILE_DEV_DEBUG=line-tables-only`, for the build's own process):
+backtraces keep their files and lines, and the library is a fraction of the
+half-gigabyte that full debug info makes it — which an emulator could not
+reinstall, because a reinstall holds both copies. Set the variable yourself to
+choose another level.
 
 A debug package carries the values `development.env` names, and the build says
 which. Keep it on your own devices.
